@@ -21,8 +21,8 @@ jest.mock('../util/logger', () => ({
   error: jest.fn(),
 }));
 
-// Mock env
-jest.mock('../util/env', () => ({
+// Mock env with mutable object
+const mockEnv = {
   RADARR_API_URL: 'http://localhost:7878',
   RADARR_API_KEY: 'test-key',
   RADARR_QUALITY_PROFILE: 'HD-1080p',
@@ -30,9 +30,11 @@ jest.mock('../util/env', () => ({
   RADARR_TAGS: 'tag1,tag2',
   RADARR_ADD_UNMONITORED: false,
   DRY_RUN: false,
-}));
+  RADARR_ROOT_FOLDER_ID: undefined as string | undefined,
+};
 
-// Import after mocking
+jest.mock('../util/env', () => mockEnv);
+
 import {
   getQualityProfileId,
   getRootFolder,
@@ -46,6 +48,15 @@ import {
 describe('radarr API', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Reset env to defaults
+    mockEnv.RADARR_API_URL = 'http://localhost:7878';
+    mockEnv.RADARR_API_KEY = 'test-key';
+    mockEnv.RADARR_QUALITY_PROFILE = 'HD-1080p';
+    mockEnv.RADARR_MINIMUM_AVAILABILITY = 'released';
+    mockEnv.RADARR_TAGS = 'tag1,tag2';
+    mockEnv.RADARR_ADD_UNMONITORED = false;
+    mockEnv.DRY_RUN = false;
+    mockEnv.RADARR_ROOT_FOLDER_ID = undefined;
   });
 
   describe('getQualityProfileId', () => {
@@ -78,11 +89,13 @@ describe('radarr API', () => {
     });
 
     it('should return null on error', async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network error'));
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: any) => cb() as any);
+      mockAxiosInstance.get.mockRejectedValue(new Error('Network error'));
 
       const result = await getQualityProfileId('HD-1080p');
 
       expect(result).toBeNull();
+      setTimeoutSpy.mockRestore();
     });
   });
 
@@ -112,11 +125,13 @@ describe('radarr API', () => {
     });
 
     it('should return null on error', async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network error'));
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: any) => cb() as any);
+      mockAxiosInstance.get.mockRejectedValue(new Error('Network error'));
 
       const result = await getRootFolder();
 
       expect(result).toBeNull();
+      setTimeoutSpy.mockRestore();
     });
   });
 
@@ -273,11 +288,11 @@ describe('radarr API', () => {
     });
 
     it('should handle dry run mode', async () => {
-      // For this test, we can't easily change the env at runtime since it's already loaded
-      // Instead, we'll verify the logic by checking the env mock
-      // This test is more of an integration test that would need env variable changes
-      // For unit testing, we skip this as DRY_RUN is set at module load time
-      expect(true).toBe(true);
+      mockEnv.DRY_RUN = true;
+
+      await addMovie(mockMovie, 2, '/movies', [1], 'released');
+
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
     it('should handle movie already exists error', async () => {
@@ -298,10 +313,20 @@ describe('radarr API', () => {
     });
 
     it('should set monitored to false when RADARR_ADD_UNMONITORED is true', async () => {
-      // For this test, we can't easily change the env at runtime since it's already loaded
-      // This test would need to be an integration test with actual env variable changes
-      // For unit testing, we skip this as RADARR_ADD_UNMONITORED is set at module load time
-      expect(true).toBe(true);
+      mockEnv.RADARR_ADD_UNMONITORED = true;
+
+      mockAxiosInstance.post.mockResolvedValueOnce({
+        data: { id: 1, title: 'Test Movie' },
+      });
+
+      await addMovie(mockMovie, 2, '/movies', [1], 'released');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/api/v3/movie',
+        expect.objectContaining({
+          monitored: false,
+        })
+      );
     });
   });
 

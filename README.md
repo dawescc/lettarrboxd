@@ -4,7 +4,7 @@ Automatically sync your Letterboxd lists to Radarr for seamless movie management
 
 ## Overview
 
-Lettarrboxd is an application that monitors your Letterboxd lists (watchlists, regular lists, watched movies, filmographies, collections, etc.) and automatically pushes new movies to Radarr. It runs continuously, checking for updates at configurable intervals and only processing new additions to avoid duplicate API calls.
+Lettarrboxd is an application that monitors your Letterboxd lists (watchlists, regular lists, watched movies, filmographies, collections, etc.) and Serializd watchlists, automatically pushing new movies to Radarr and series to Sonarr. It runs continuously, checking for updates at configurable intervals and only processing new additions to avoid duplicate API calls.
 
 ## Supported Letterboxd URLs
 
@@ -19,10 +19,19 @@ The application supports various types of Letterboxd URLs for the `LETTERBOXD_UR
 - **Director Filmography**: `https://letterboxd.com/director/director-name/`
 - **Writer Filmography**: `https://letterboxd.com/writer/writer-name/`
 
+## Supported Serializd URLs
+
+The application supports Serializd watchlists for the `SERIALIZD_URL` environment variable:
+
+- **Watchlists**: `https://www.serializd.com/user/username/watchlist`
+
 ### Examples
 ```bash
-# User's watchlist
+# User's Letterboxd watchlist
 LETTERBOXD_URL=https://letterboxd.com/moviefan123/watchlist/
+
+# User's Serializd watchlist
+SERIALIZD_URL=https://www.serializd.com/user/tvfan123/watchlist
 
 # User's custom list
 LETTERBOXD_URL=https://letterboxd.com/dave/list/official-top-250-narrative-feature-films/
@@ -49,7 +58,7 @@ LETTERBOXD_URL=https://letterboxd.com/director/christopher-nolan/
 LETTERBOXD_URL=https://letterboxd.com/writer/aaron-sorkin/
 ```
 
-**Note**: All Letterboxd lists must be public for the application to access them.
+**Note**: All lists must be public for the application to access them.
 
 ## Quick Start
 
@@ -62,7 +71,11 @@ docker run -d \
   -e RADARR_API_URL=http://your-radarr:7878 \
   -e RADARR_API_KEY=your_api_key \
   -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e RADARR_TAGS="watchlist,must-watch" \
+  -e SERIALIZD_URL=https://www.serializd.com/user/your_username/watchlist \
+  -e SONARR_API_URL=http://your-sonarr:8989 \
+  -e SONARR_API_KEY=your_sonarr_key \
+  -e SONARR_QUALITY_PROFILE="HD-1080p" \
+  -e SONARR_ROOT_FOLDER_PATH="/tv" \
   -e DRY_RUN=false \
   ryanpage/lettarrboxd:latest
 ```
@@ -209,6 +222,9 @@ docker run -d \
 
 ### Required Environment Variables
 
+At least one pair of source/destination variables must be configured.
+
+#### Letterboxd -> Radarr
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `LETTERBOXD_URL` | Your Letterboxd list URL | `https://letterboxd.com/moviefan123/watchlist/` |
@@ -216,18 +232,28 @@ docker run -d \
 | `RADARR_API_KEY` | Radarr API key | `abc123...` |
 | `RADARR_QUALITY_PROFILE` | Quality profile name in Radarr | `HD-1080p` |
 
+#### Serializd -> Sonarr
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SERIALIZD_URL` | Your Serializd watchlist URL | `https://www.serializd.com/user/username/watchlist` |
+| `SONARR_API_URL` | Sonarr base URL | `http://sonarr:8989` |
+| `SONARR_API_KEY` | Sonarr API key | `abc123...` |
+| `SONARR_QUALITY_PROFILE` | Quality profile name in Sonarr | `HD-1080p` |
+| `SONARR_ROOT_FOLDER_PATH` | Root folder path for series | `/tv` |
+| `SONARR_SEASON_MONITORING` | Season monitoring strategy (`all`, `first`, `latest`, `future`, `none`) | `all` |
+
 ### Optional Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHECK_INTERVAL_MINUTES` | `10` | How often to check for new movies (minimum 10) |
+| `CHECK_INTERVAL_MINUTES` | `10` | How often to check for new items (minimum 10) |
 | `RADARR_MINIMUM_AVAILABILITY` | `released` | When movie becomes available (`announced`, `inCinemas`, `released`) |
 | `RADARR_ROOT_FOLDER_ID` | - | Specific root folder ID to use in Radarr (uses first available if not set) |
 | `RADARR_ADD_UNMONITORED` | `false` | When `true`, adds movies to Radarr in an unmonitored state |
 | `RADARR_TAGS` | - | Additional tags to apply to movies (comma-separated). Movies are always tagged with `letterboxd` |
 | `LETTERBOXD_TAKE_AMOUNT` | - | Number of movies to sync (requires `LETTERBOXD_TAKE_STRATEGY`) |
 | `LETTERBOXD_TAKE_STRATEGY` | - | Movie selection strategy: `newest` or `oldest` (requires `LETTERBOXD_TAKE_AMOUNT`) |
-| `DRY_RUN` | `false` | When `true`, logs what would be added to Radarr without making actual API calls |
+| `DRY_RUN` | `false` | When `true`, logs what would be added without making actual API calls |
 | `DATA_DIR` | `/data` | Directory for storing application data. You generally do not need to worry about this. |
 
 ## Development

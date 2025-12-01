@@ -1,4 +1,5 @@
 # Build stage
+
 FROM node:20-alpine AS builder
 
 # Set working directory
@@ -18,6 +19,26 @@ RUN yarn tsc
 
 # Production stage
 FROM node:20-alpine AS production
+
+LABEL org.opencontainers.image.title=lettarrboxd
+LABEL org.opencontainers.image.source=https://github.com/dawescc/lettarrboxd
+LABEL org.opencontainers.image.url=https://github.com/dawescc/lettarrboxd
+LABEL org.opencontainers.image.description="Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr."
+LABEL org.opencontainers.image.licenses=MIT
+LABEL org.opencontainers.image.version=1.4.2
+
+# Install Chromium for Puppeteer
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+# Set Puppeteer to use installed Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Set working directory
 WORKDIR /app

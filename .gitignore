@@ -49,3 +49,4 @@ coverage/
 tmp/
 temp/
 data/
+package-lock.json

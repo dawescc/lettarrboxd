@@ -26,22 +26,26 @@ const axios = Axios.create({
     }
 });
 
+import { retryOperation } from '../util/retry';
+
 export async function getQualityProfileId(profileName: string): Promise<number | null> {
     try {
-        logger.debug(`Getting quality profile ID for: ${profileName}`);
+        return await retryOperation(async () => {
+            logger.debug(`Getting quality profile ID for: ${profileName}`);
 
-        const response = await axios.get('/api/v3/qualityprofile');
-        const profiles = response.data;
+            const response = await axios.get('/api/v3/qualityprofile');
+            const profiles = response.data;
 
-        const profile = profiles.find((p: any) => p.name === profileName);
-        if (profile) {
-            logger.debug(`Found quality profile: ${profileName} (ID: ${profile.id})`);
-            return profile.id;
-        } else {
-            logger.error(`Quality profile not found: ${profileName}`);
-            logger.debug('Available profiles:', profiles.map((p: any) => p.name));
-            return null;
-        }
+            const profile = profiles.find((p: any) => p.name === profileName);
+            if (profile) {
+                logger.debug(`Found quality profile: ${profileName} (ID: ${profile.id})`);
+                return profile.id;
+            } else {
+                logger.error(`Quality profile not found: ${profileName}`);
+                logger.debug('Available profiles:', profiles.map((p: any) => p.name));
+                return null;
+            }
+        }, 'get quality profile');
     } catch (error) {
         logger.error('Error getting quality profiles:', error);
         return null;
@@ -50,17 +54,19 @@ export async function getQualityProfileId(profileName: string): Promise<number |
 
 export async function getRootFolder(): Promise<string | null> {
     try {
-        const response = await axios.get('/api/v3/rootfolder');
-        const rootFolders = response.data;
+        return await retryOperation(async () => {
+            const response = await axios.get('/api/v3/rootfolder');
+            const rootFolders = response.data;
 
-        if (rootFolders.length > 0) {
-            const rootFolder = rootFolders[0].path;
-            logger.debug(`Using root folder: ${rootFolder}`);
-            return rootFolder;
-        } else {
-            logger.error('No root folders found in Radarr');
-            return null;
-        }
+            if (rootFolders.length > 0) {
+                const rootFolder = rootFolders[0].path;
+                logger.debug(`Using root folder: ${rootFolder}`);
+                return rootFolder;
+            } else {
+                logger.error('No root folders found in Radarr');
+                return null;
+            }
+        }, 'get root folder');
     } catch (error) {
         logger.error('Error getting root folders:', error);
         return null;
@@ -139,6 +145,9 @@ export async function getAllRequiredTagIds(): Promise<number[]> {
 }
 
 export async function upsertMovies(movies: LetterboxdMovie[]): Promise<void> {
+    if (!env.RADARR_QUALITY_PROFILE) {
+        throw new Error('Radarr quality profile not configured');
+    }
     const qualityProfileId = await getQualityProfileId(env.RADARR_QUALITY_PROFILE);
 
     if (!qualityProfileId) {

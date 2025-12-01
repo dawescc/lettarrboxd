@@ -1,35 +1,67 @@
 require('dotenv').config();
 
 
-import schedule from 'node-schedule';
 import env from './util/env';
 import logger from './util/logger';
 import { fetchMoviesFromUrl } from './scraper';
 import { upsertMovies } from './api/radarr';
+import { SerializdScraper } from './scraper/serializd';
+import { upsertSeries } from './api/sonarr';
 
 function startScheduledMonitoring(): void {
-  const rule = new schedule.RecurrenceRule();
-  rule.minute = env.CHECK_INTERVAL_MINUTES;
-
-  run();
-
-  schedule.scheduleJob(rule, async () => {
-    await run();
+  // Run immediately on startup
+  run().finally(() => {
+    scheduleNextRun();
   });
+  
+  logger.info(`Scheduled to run every ${env.CHECK_INTERVAL_MINUTES} minutes`);
+}
+
+function scheduleNextRun() {
+  const intervalMs = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
+  setTimeout(() => {
+    run().finally(() => {
+      scheduleNextRun();
+    });
+  }, intervalMs);
 }
 
 async function run() {
-  const movies = await fetchMoviesFromUrl(env.LETTERBOXD_URL);
-  await upsertMovies(movies);
+  // Letterboxd -> Radarr
+  if (env.LETTERBOXD_URL) {
+    try {
+      logger.info('Starting Letterboxd sync...');
+      const movies = await fetchMoviesFromUrl(env.LETTERBOXD_URL);
+      logger.info(`Found ${movies.length} movies in Letterboxd list`);
+      await upsertMovies(movies);
+    } catch (e) {
+      logger.error('Error in Letterboxd sync:', e);
+    }
+  }
+
+  // Serializd -> Sonarr
+  if (env.SERIALIZD_URL) {
+    try {
+      logger.info('Starting Serializd sync...');
+      const scraper = new SerializdScraper(env.SERIALIZD_URL);
+      const series = await scraper.getSeries();
+      logger.info(`Found ${series.length} series in Serializd watchlist`);
+      await upsertSeries(series);
+    } catch (e) {
+      logger.error('Error in Serializd sync:', e);
+    }
+  }
 }
 
 export async function main() {
   startScheduledMonitoring();
+  
+  // Keep the process alive
+  logger.info('Application started successfully. Monitoring for changes...');
 }
 
 export { startScheduledMonitoring };
 
-// Only run main if this file is executed directly
 if (require.main === module) {
   main().catch(logger.error);
 }
