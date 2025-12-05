@@ -40,7 +40,7 @@ describe('main application', () => {
       ];
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
+      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
 
@@ -49,7 +49,7 @@ describe('main application', () => {
 
       // Verify run was called immediately
       expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalledTimes(1);
-      expect(radarrModule.upsertMovies).toHaveBeenCalledTimes(1);
+      expect(radarrModule.syncMovies).toHaveBeenCalledTimes(1);
     });
 
     it('should fetch movies and upsert them during run', async () => {
@@ -73,7 +73,7 @@ describe('main application', () => {
       ];
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
+      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
 
@@ -83,7 +83,7 @@ describe('main application', () => {
       expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalledWith(
         'https://letterboxd.com/user/watchlist'
       );
-      expect(radarrModule.upsertMovies).toHaveBeenCalledWith(mockMovies);
+      expect(radarrModule.syncMovies).toHaveBeenCalledWith(mockMovies);
     });
 
     it('should call fetchMoviesFromUrl and upsertMovies during scheduled run', async () => {
@@ -99,7 +99,7 @@ describe('main application', () => {
       ];
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
+      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
 
@@ -111,7 +111,7 @@ describe('main application', () => {
       // Clear mocks to test scheduled callback
       jest.clearAllMocks();
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
+      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
       // Fast-forward time by 10 minutes (600000ms)
       jest.advanceTimersByTime(600000);
@@ -122,7 +122,7 @@ describe('main application', () => {
 
       // Verify the scheduled callback also calls the functions
       expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalled();
-      expect(radarrModule.upsertMovies).toHaveBeenCalled();
+      expect(radarrModule.syncMovies).toHaveBeenCalled();
     });
   });
 
@@ -140,13 +140,13 @@ describe('main application', () => {
       ];
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
+      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
       await main();
       await Promise.resolve();
 
       expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalled();
-      expect(radarrModule.upsertMovies).toHaveBeenCalled();
+      expect(radarrModule.syncMovies).toHaveBeenCalled();
     });
   });
 });

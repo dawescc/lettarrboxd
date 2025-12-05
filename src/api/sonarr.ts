@@ -68,7 +68,7 @@ export async function getQualityProfileId(profileName: string): Promise<number |
             }
         }, 'get quality profile');
     } catch (error) {
-        logger.error('Error getting Sonarr quality profiles:', error);
+        logger.error('Error getting Sonarr quality profiles:', error as any);
         return null;
     }
 }
@@ -89,7 +89,7 @@ export async function getRootFolder(): Promise<string | null> {
             }
         }, 'get root folder');
     } catch (error) {
-        logger.error('Error getting Sonarr root folders:', error);
+        logger.error('Error getting Sonarr root folders:', error as any);
         return null;
     }
 }
@@ -130,7 +130,7 @@ export async function getOrCreateTag(tagName: string): Promise<number | null> {
         logger.info(`Created tag: ${tagName} (ID: ${createResponse.data.id})`);
         return createResponse.data.id;
     } catch (error) {
-        logger.error(`Error getting or creating tag ${tagName}:`, error);
+        logger.error(`Error getting or creating tag ${tagName}:`, error as any);
         return null;
     }
 }
@@ -177,7 +177,7 @@ export async function getSeriesLookup(tmdbId: string): Promise<SonarrLookupResul
         }
         return null;
     } catch (error) {
-        logger.error(`Error looking up series with TMDB ID ${tmdbId}:`, error);
+        logger.error(`Error looking up series with TMDB ID ${tmdbId}:`, error as any);
         return null;
     }
 }
@@ -216,7 +216,41 @@ function configureSeasonMonitoring(seasons: SonarrSeason[]): Array<{ seasonNumbe
     });
 }
 
-export async function upsertSeries(seriesList: LetterboxdMovie[]): Promise<void> {
+export async function getAllSeries(): Promise<any[]> {
+    try {
+        return await retryOperation(async () => {
+            const response = await axios.get('/api/v3/series');
+            return response.data;
+        }, 'get all series');
+    } catch (error) {
+        logger.error('Error getting all series from Sonarr:', error as any);
+        return [];
+    }
+}
+
+export async function deleteSeries(id: number, title: string): Promise<void> {
+    try {
+        if (env.DRY_RUN) {
+            logger.info(`[DRY RUN] Would delete series from Sonarr: ${title} (ID: ${id})`);
+            return;
+        }
+
+        await retryOperation(async () => {
+            await axios.delete(`/api/v3/series/${id}`, {
+                params: {
+                    deleteFiles: false,
+                    addImportExclusion: false
+                }
+            });
+        }, 'delete series');
+        
+        logger.info(`Successfully deleted series: ${title}`);
+    } catch (error) {
+        logger.error(`Error deleting series ${title} (ID: ${id}):`, error as any);
+    }
+}
+
+export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
     if (!env.SONARR_QUALITY_PROFILE) {
         throw new Error('Sonarr quality profile not configured');
     }
@@ -232,30 +266,93 @@ export async function upsertSeries(seriesList: LetterboxdMovie[]): Promise<void>
     }
 
     const tagIds = await getAllRequiredTagIds();
+    const serializdTagId = await getOrCreateTag(DEFAULT_TAG_NAME);
 
-    await Bluebird.map(seriesList, series => {
-        return addSeries(series, qualityProfileId, rootFolderPath, tagIds);
-    }, { concurrency: 1 });
+    // 1. Fetch all existing series
+    logger.info('Fetching existing series from Sonarr...');
+    const existingSeries = await getAllSeries();
+    logger.info(`Found ${existingSeries.length} existing series in Sonarr.`);
+
+    // 2. Build Maps for efficient lookup
+    // Map TMDB ID -> TVDB ID (if available in Sonarr data)
+    // Sonarr v3 series objects often have 'tvdbId' and sometimes 'tmdbId' (or we might need to rely on lookup)
+    const tmdbToTvdbMap = new Map<number, number>();
+    const existingTvdbIds = new Set<number>();
+
+    existingSeries.forEach((s: any) => {
+        if (s.tvdbId) existingTvdbIds.add(s.tvdbId);
+        // Note: s.tmdbId might not always be present, but we use it if it is to save lookups
+        if (s.tmdbId) tmdbToTvdbMap.set(s.tmdbId, s.tvdbId);
+    });
+
+    const keepTvdbIds = new Set<number>();
+
+    // 3. Process Watchlist Items (Add/Update list of "Keep" IDs)
+    await Bluebird.map(seriesList, async (item) => {
+        if (!item.tmdbId) return;
+        const tmdbId = parseInt(item.tmdbId);
+
+        // Optimization: If we already know the TVDB ID from our local map, use it
+        if (tmdbToTvdbMap.has(tmdbId)) {
+            const tvdbId = tmdbToTvdbMap.get(tmdbId)!;
+            keepTvdbIds.add(tvdbId);
+            logger.debug(`Series ${item.name} already exists in Sonarr (cached match), skipping add.`);
+            return;
+        }
+
+        // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
+        // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
+        // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
+        const tvdbId = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds);
+        if (tvdbId) {
+            keepTvdbIds.add(tvdbId);
+        }
+    }, { concurrency: 3 });
+
+    // 4. Remove missing series (if enabled)
+    if (env.REMOVE_MISSING_ITEMS && serializdTagId) {
+        logger.info('Checking for series to remove...');
+
+        const seriesToRemove = existingSeries.filter((s: any) => {
+            const hasTag = s.tags && s.tags.includes(serializdTagId);
+            const notInWatchlist = !keepTvdbIds.has(s.tvdbId);
+            return hasTag && notInWatchlist;
+        });
+
+        if (seriesToRemove.length > 0) {
+            logger.info(`Found ${seriesToRemove.length} series to remove.`);
+            await Bluebird.map(seriesToRemove, (s: any) => {
+                return deleteSeries(s.id, s.title);
+            }, { concurrency: 3 });
+        } else {
+            logger.info('No series to remove.');
+        }
+    }
 }
 
-async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[]): Promise<void> {
+async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[], existingTvdbIds: Set<number>): Promise<number | null> {
     try {
         if (!item.tmdbId) {
             logger.warn(`Skipping ${item.name}: No TMDB ID`);
-            return;
+            return null;
         }
 
+        // We have to lookup to get the TVDB ID and Title
         const lookupResult = await getSeriesLookup(item.tmdbId);
         if (!lookupResult) {
             logger.warn(`Could not find series in Sonarr lookup: ${item.name} (TMDB: ${item.tmdbId})`);
-            return;
+            return null;
         }
 
-        if (lookupResult.id) {
-            logger.debug(`Series already exists in Sonarr: ${lookupResult.title}`);
-            return;
+        const tvdbId = lookupResult.tvdbId;
+
+        // Check if it already exists (using the TVDB ID we just found)
+        if (existingTvdbIds.has(tvdbId)) {
+            logger.debug(`Series already exists in Sonarr (lookup match): ${lookupResult.title}`);
+            return tvdbId;
         }
 
+        // If we are here, it's new. Add it.
         const seasons = configureSeasonMonitoring(lookupResult.seasons || []);
 
         const payload: SonarrSeries = {
@@ -272,14 +369,17 @@ async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFo
         };
 
         if (env.DRY_RUN) {
-            logger.info(`[DRY RUN] Would add series to Sonarr: ${payload.title}`, payload);
-            return;
+            logger.info(payload, `[DRY RUN] Would add series to Sonarr: ${payload.title}`);
+            return tvdbId; // Return ID even in dry run so we don't try to delete it if we were simulating
         }
 
         const response = await axios.post('/api/v3/series', payload);
         logger.info(`Successfully added series: ${payload.title}`, response.data);
+        
+        return tvdbId;
 
     } catch (e: any) {
         logger.error(`Error adding series ${item.name}:`, e.message);
+        return null;
     }
 }

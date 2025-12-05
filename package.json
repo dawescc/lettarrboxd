@@ -1,15 +1,15 @@
 {
   "name": "lettarrboxd",
-  "version": "1.0.0",
-  "main": "dist/index.js",
+  "version": "1.5.1-beta",
+  "main": "src/index.ts",
   "repository": "git@github.com:ryanpag3/lettarrboxd.git",
   "author": "Ryan Page <ryanapage@gmail.com>",
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "node dist/index.js",
-    "start:dev": "nodemon src/index.ts",
-    "build": "tsc",
+    "start": "bun src/index.ts",
+    "start:dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:unit": "jest --testPathIgnorePatterns=itest",
     "test:integration": "jest --testPathPatterns=itest",
@@ -22,12 +22,8 @@
     "cheerio": "^1.1.0",
     "dotenv": "^17.2.0",
     "node-schedule": "^2.1.1",
-    "nodemon": "^3.1.10",
     "pino": "^9.7.0",
     "pino-pretty": "^13.0.0",
-    "puppeteer": "^24.31.0",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.8.3",
     "zod": "^4.0.5"
   },
   "devDependencies": {
@@ -36,9 +32,9 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.15",
     "@types/node-schedule": "^2.1.8",
-    "@types/puppeteer": "^5.4.7",
     "express": "^5.1.0",
     "jest": "^30.0.4",
-    "ts-jest": "^29.4.0"
+    "ts-jest": "^29.4.0",
+    "typescript": "^5.9.3"
   }
 }

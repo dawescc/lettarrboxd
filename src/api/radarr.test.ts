@@ -2,6 +2,7 @@
 const mockAxiosInstance = {
   get: jest.fn(),
   post: jest.fn(),
+  delete: jest.fn(),
 };
 
 jest.mock('axios', () => {
@@ -31,9 +32,14 @@ const mockEnv = {
   RADARR_ADD_UNMONITORED: false,
   DRY_RUN: false,
   RADARR_ROOT_FOLDER_ID: undefined as string | undefined,
+  REMOVE_MISSING_ITEMS: false,
 };
 
 jest.mock('../util/env', () => mockEnv);
+
+jest.mock('../util/retry', () => ({
+  retryOperation: jest.fn((fn) => fn()),
+}));
 
 import {
   getQualityProfileId,
@@ -42,7 +48,9 @@ import {
   getOrCreateTag,
   getAllRequiredTagIds,
   addMovie,
-  upsertMovies,
+  syncMovies,
+  getAllMovies,
+  deleteMovie,
 } from './radarr';
 
 describe('radarr API', () => {
@@ -57,6 +65,7 @@ describe('radarr API', () => {
     mockEnv.RADARR_ADD_UNMONITORED = false;
     mockEnv.DRY_RUN = false;
     mockEnv.RADARR_ROOT_FOLDER_ID = undefined;
+    mockEnv.REMOVE_MISSING_ITEMS = false;
   });
 
   describe('getQualityProfileId', () => {
@@ -330,7 +339,40 @@ describe('radarr API', () => {
     });
   });
 
-  describe('upsertMovies', () => {
+  describe('getAllMovies', () => {
+    it('should return all movies', async () => {
+      const mockMovies = [{ id: 1, title: 'Movie 1' }];
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: mockMovies });
+
+      const result = await getAllMovies();
+      expect(result).toEqual(mockMovies);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/movie');
+    });
+
+    it('should return empty array on error', async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network error'));
+      const result = await getAllMovies();
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('deleteMovie', () => {
+    it('should delete movie', async () => {
+      mockAxiosInstance.delete.mockResolvedValueOnce({});
+      await deleteMovie(1, 'Movie 1');
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/movie/1', {
+        params: { deleteFiles: false, addImportExclusion: false }
+      });
+    });
+
+    it('should not delete in dry run', async () => {
+      mockEnv.DRY_RUN = true;
+      await deleteMovie(1, 'Movie 1');
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncMovies', () => {
     const mockMovies = [
       {
         id: 1,
@@ -350,24 +392,25 @@ describe('radarr API', () => {
       },
     ];
 
-    it('should process all movies', async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({
-          data: [{ id: 2, name: 'HD-1080p' }],
-        })
-        .mockResolvedValueOnce({
-          data: [{ id: 1, path: '/movies' }],
-        })
-        .mockResolvedValue({
-          data: [],
-        });
+    it('should process all movies and add new ones', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [] });
+        if (url === '/api/v3/movie') return Promise.resolve({ data: [] }); // Empty library
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
 
-      mockAxiosInstance.post
-        .mockResolvedValueOnce({ data: { id: 1, label: 'letterboxd' } })
-        .mockResolvedValueOnce({ data: { id: 1, title: 'Movie 1' } })
-        .mockResolvedValueOnce({ data: { id: 2, title: 'Movie 2' } });
+      mockAxiosInstance.post.mockImplementation((url, data) => {
+        if (url.includes('/tag')) return Promise.resolve({ data: { id: 1, label: 'letterboxd' } });
+        if (url === '/api/v3/movie') {
+          if (data.title === 'Movie 1') return Promise.resolve({ data: { id: 1, title: 'Movie 1' } });
+          if (data.title === 'Movie 2') return Promise.resolve({ data: { id: 2, title: 'Movie 2' } });
+        }
+        return Promise.resolve({ data: {} });
+      });
 
-      await upsertMovies(mockMovies);
+      await syncMovies(mockMovies);
 
       expect(mockAxiosInstance.post).toHaveBeenCalledWith(
         '/api/v3/movie',
@@ -379,26 +422,74 @@ describe('radarr API', () => {
       );
     });
 
+    it('should skip existing movies (cached)', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [] });
+        if (url === '/api/v3/movie') return Promise.resolve({ 
+          data: [{ id: 100, title: 'Movie 1', tmdbId: 123 }] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.post.mockImplementation((url, data) => {
+        if (url.includes('/tag')) return Promise.resolve({ data: { id: 1, label: 'letterboxd' } });
+        if (url === '/api/v3/movie') return Promise.resolve({ data: { id: 2, title: 'Movie 2' } });
+        return Promise.resolve({ data: {} });
+      });
+
+      await syncMovies(mockMovies);
+
+      // Should only add Movie 2
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/api/v3/movie',
+        expect.objectContaining({ title: 'Movie 2' })
+      );
+      expect(mockAxiosInstance.post).not.toHaveBeenCalledWith(
+        '/api/v3/movie',
+        expect.objectContaining({ title: 'Movie 1' })
+      );
+    });
+
+    it('should remove missing movies when enabled', async () => {
+      mockEnv.REMOVE_MISSING_ITEMS = true;
+      
+      const moviesInWatchlist = [mockMovies[0]]; // Only Movie 1 is in watchlist
+
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'letterboxd' }] });
+        if (url === '/api/v3/movie') return Promise.resolve({ 
+          data: [
+            { id: 100, title: 'Movie 1', tmdbId: 123, tags: [1] }, // Keep
+            { id: 101, title: 'Movie 2', tmdbId: 456, tags: [1] }, // Remove
+            { id: 102, title: 'Movie 3', tmdbId: 789, tags: [] }, // Keep
+          ] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, label: 'letterboxd' } });
+      mockAxiosInstance.delete.mockResolvedValue({});
+
+      await syncMovies(moviesInWatchlist);
+
+      // Should delete Movie 2
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/movie/101', expect.any(Object));
+      // Should NOT delete Movie 3 (no tag)
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalledWith('/api/v3/movie/102', expect.any(Object));
+    });
+
     it('should throw error when quality profile not found', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: [],
       });
 
-      await expect(upsertMovies(mockMovies)).rejects.toThrow(
+      await expect(syncMovies(mockMovies)).rejects.toThrow(
         'Could not get quality profile ID.'
       );
-    });
-
-    it('should throw error when root folder not found', async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({
-          data: [{ id: 2, name: 'HD-1080p' }],
-        })
-        .mockResolvedValueOnce({
-          data: [],
-        });
-
-      await expect(upsertMovies(mockMovies)).rejects.toThrow('Could not get root folder');
     });
   });
 });

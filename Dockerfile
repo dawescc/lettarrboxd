@@ -1,56 +1,25 @@
-# Build stage
-
-FROM node:20-alpine AS builder
-
-# Set working directory
-WORKDIR /app
-
-# Copy package files
-COPY package.json yarn.lock ./
-
-# Install all dependencies (including devDependencies for build)
-RUN yarn install --frozen-lockfile
-
-# Copy source code
-COPY . .
-
-# Build TypeScript
-RUN yarn tsc
-
-# Production stage
-FROM node:20-alpine AS production
+FROM oven/bun:alpine
 
 LABEL org.opencontainers.image.title=lettarrboxd
 LABEL org.opencontainers.image.source=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.url=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.description="Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr."
 LABEL org.opencontainers.image.licenses=MIT
-LABEL org.opencontainers.image.version=1.4.2
+LABEL org.opencontainers.image.version=1.5.1-beta
 
-# Install Chromium for Puppeteer
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
+LABEL org.opencontainers.image.version=1.5.1-beta
 
-# Set Puppeteer to use installed Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-
-# Set working directory
 WORKDIR /app
 
 # Copy package files
-COPY package.json yarn.lock ./
+COPY package.json bun.lock ./
 
-# Install only production dependencies
-RUN yarn install --frozen-lockfile --production && yarn cache clean
+# Install production dependencies
+RUN bun install --frozen-lockfile --production && \
+    rm -rf ~/.bun/install/cache
 
-# Copy built JavaScript from builder stage
-COPY --from=builder /app/dist ./dist
+# Copy source code
+COPY . .
 
 # Create data directory
 RUN mkdir -p /data
@@ -74,7 +43,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=5m --timeout=30s --start-period=5s --retries=3 \
-  CMD node -e "console.log('Health check passed')" || exit 1
+  CMD bun -e "console.log('Health check passed')" || exit 1
 
 # Start the application
-CMD ["node", "dist/index.js"]
+CMD ["bun", "start"]

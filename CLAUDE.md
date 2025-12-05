@@ -9,11 +9,10 @@ Lettarrboxd is a TypeScript Node.js application that automatically syncs Letterb
 ## Commands
 
 ### Development
-- `yarn install` - Install dependencies
-- `yarn start` - Run the application using ts-node
-- `yarn start:dev` - Run with auto-reload during development using nodemon
-- `yarn build` - Compile TypeScript to JavaScript
-- `yarn tsc --noEmit` - Type check without emitting files
+- `bun install` - Install dependencies
+- `bun start` - Run the application
+- `bun run start:dev` - Run with auto-reload
+- `bun run build` - Type check (tsc)
 
 ### Docker
 - `docker build -t lettarrboxd .` - Build Docker image
@@ -70,6 +69,7 @@ interface MoviesData {
 - "letterboxd-watchlist" tag for organization
 - Automatic monitoring and search enabled
 - Configurable minimum availability settings
+- Optional cleanup of items removed from watchlist (via `REMOVE_MISSING_ITEMS`)
 
 ### Web Scraping Strategy
 Letterboxd scraping is implemented with:
@@ -90,7 +90,7 @@ The codebase is organized into small, focused functions:
 
 ### TypeScript Configuration
 - Strict mode enabled with comprehensive type checking
-- Uses ts-node for direct TypeScript execution
+- Uses Bun for direct TypeScript execution
 - All environment variables are strictly typed through Zod inference
 
 ### Docker Multi-Stage Build

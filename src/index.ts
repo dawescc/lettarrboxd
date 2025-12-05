@@ -4,9 +4,9 @@ require('dotenv').config();
 import env from './util/env';
 import logger from './util/logger';
 import { fetchMoviesFromUrl } from './scraper';
-import { upsertMovies } from './api/radarr';
+import { syncMovies } from './api/radarr';
 import { SerializdScraper } from './scraper/serializd';
-import { upsertSeries } from './api/sonarr';
+import { syncSeries } from './api/sonarr';
 
 function startScheduledMonitoring(): void {
   // Run immediately on startup
@@ -33,9 +33,9 @@ async function run() {
       logger.info('Starting Letterboxd sync...');
       const movies = await fetchMoviesFromUrl(env.LETTERBOXD_URL);
       logger.info(`Found ${movies.length} movies in Letterboxd list`);
-      await upsertMovies(movies);
+      await syncMovies(movies);
     } catch (e) {
-      logger.error('Error in Letterboxd sync:', e);
+      logger.error('Error in Letterboxd sync:', e as any);
     }
   }
 
@@ -46,9 +46,9 @@ async function run() {
       const scraper = new SerializdScraper(env.SERIALIZD_URL);
       const series = await scraper.getSeries();
       logger.info(`Found ${series.length} series in Serializd watchlist`);
-      await upsertSeries(series);
+      await syncSeries(series);
     } catch (e) {
-      logger.error('Error in Serializd sync:', e);
+      logger.error('Error in Serializd sync:', e as any);
     }
   }
 }
@@ -63,5 +63,5 @@ export async function main() {
 export { startScheduledMonitoring };
 
 if (require.main === module) {
-  main().catch(logger.error);
+  main().catch((e) => logger.error(e));
 }

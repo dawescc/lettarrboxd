@@ -254,14 +254,14 @@ At least one pair of source/destination variables must be configured.
 | `LETTERBOXD_TAKE_AMOUNT` | - | Number of movies to sync (requires `LETTERBOXD_TAKE_STRATEGY`) |
 | `LETTERBOXD_TAKE_STRATEGY` | - | Movie selection strategy: `newest` or `oldest` (requires `LETTERBOXD_TAKE_AMOUNT`) |
 | `DRY_RUN` | `false` | When `true`, logs what would be added without making actual API calls |
+| `REMOVE_MISSING_ITEMS` | `false` | When `true`, removes items from Radarr/Sonarr that are no longer in the watchlist (requires `letterboxd`/`serializd` tag) |
 | `DATA_DIR` | `/data` | Directory for storing application data. You generally do not need to worry about this. |
 
 ## Development
 
 ### Prerequisites
 
-- Node.js 20+
-- Yarn package manager
+- Bun 1.0+
 
 ### Setup
 
@@ -271,22 +271,21 @@ git clone https://github.com/ryanpag3/lettarrboxd.git
 cd lettarrboxd
 
 # Install dependencies
-yarn install
+bun install
 
 # Create environment file
 cp .env.example .env
 # Edit .env with your configuration
 
 # Run in development mode
-yarn start:dev
+bun run start:dev
 ```
 
 ### Development Commands
 
 ```bash
-yarn start:dev    # Run with auto-reload
-yarn tsc          # Compile TypeScript
-yarn tsc --noEmit # Type check only
+bun run start:dev    # Run with auto-reload
+bun run build        # Type check (tsc)
 ```
 
 ### Development Mode

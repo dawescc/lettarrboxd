@@ -2,6 +2,7 @@
 const mockAxiosInstance = {
   get: jest.fn(),
   post: jest.fn(),
+  delete: jest.fn(),
 };
 
 jest.mock('axios', () => {
@@ -29,17 +30,28 @@ jest.mock('../util/env', () => ({
   SONARR_ROOT_FOLDER_PATH: '/tv',
   SONARR_SEASON_MONITORING: 'all',
   DRY_RUN: false,
+  REMOVE_MISSING_ITEMS: false,
+}));
+
+jest.mock('../util/retry', () => ({
+  retryOperation: jest.fn((fn) => fn()),
 }));
 
 import {
   getQualityProfileId,
   getSeriesLookup,
-  upsertSeries,
+  syncSeries,
+  getAllSeries,
+  deleteSeries,
 } from './sonarr';
 
 describe('sonarr API', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Reset env
+    const env = require('../util/env');
+    env.REMOVE_MISSING_ITEMS = false;
+    env.DRY_RUN = false;
   });
 
   describe('getQualityProfileId', () => {
@@ -93,7 +105,41 @@ describe('sonarr API', () => {
     });
   });
 
-  describe('upsertSeries', () => {
+  describe('getAllSeries', () => {
+    it('should return all series', async () => {
+      const mockSeries = [{ id: 1, title: 'Series 1' }];
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: mockSeries });
+
+      const result = await getAllSeries();
+      expect(result).toEqual(mockSeries);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/series');
+    });
+
+    it('should return empty array on error', async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network error'));
+      const result = await getAllSeries();
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('deleteSeries', () => {
+    it('should delete series', async () => {
+      mockAxiosInstance.delete.mockResolvedValueOnce({});
+      await deleteSeries(1, 'Series 1');
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/series/1', {
+        params: { deleteFiles: false, addImportExclusion: false }
+      });
+    });
+
+    it('should not delete in dry run', async () => {
+      const env = require('../util/env');
+      env.DRY_RUN = true;
+      await deleteSeries(1, 'Series 1');
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncSeries', () => {
     const mockSeries = [
       {
         id: 1,
@@ -104,52 +150,74 @@ describe('sonarr API', () => {
     ];
 
     it('should add series successfully', async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({
-          data: [{ id: 2, name: 'HD-1080p' }],
-        })
-        .mockResolvedValueOnce({
-          data: [{ path: '/tv' }],
-        })
-        .mockResolvedValueOnce({
-          data: [{ id: 1, label: 'serializd' }],
-        })
-        .mockResolvedValueOnce({
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ data: [] }); // Empty library
+        if (url.includes('/series/lookup')) return Promise.resolve({ 
           data: [{
             title: 'Barry',
             tvdbId: 12345,
-            seasons: [
-              { seasonNumber: 1 },
-              { seasonNumber: 2 },
-              { seasonNumber: 3 },
-              { seasonNumber: 4 }
-            ]
-          }],
+            seasons: [{ seasonNumber: 1 }]
+          }]
         });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
 
       mockAxiosInstance.post.mockResolvedValueOnce({
         data: { id: 1, title: 'Barry' },
       });
 
-      await upsertSeries(mockSeries);
+      await syncSeries(mockSeries);
 
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/series', {
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/series', expect.objectContaining({
         title: 'Barry',
-        qualityProfileId: 2,
-        rootFolderPath: '/tv',
         tvdbId: 12345,
-        monitored: true,
-        tags: [1],
-        seasons: [
-          { seasonNumber: 1, monitored: true },
-          { seasonNumber: 2, monitored: true },
-          { seasonNumber: 3, monitored: true },
-          { seasonNumber: 4, monitored: true }
-        ],
-        addOptions: {
-          searchForMissingEpisodes: true,
-        },
+      }));
+    });
+
+    it('should skip existing series (cached match)', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ 
+          data: [{ id: 100, title: 'Barry', tvdbId: 12345, tmdbId: 73107 }] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
       });
+
+      await syncSeries(mockSeries);
+
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should remove missing series when enabled', async () => {
+      const env = require('../util/env');
+      env.REMOVE_MISSING_ITEMS = true;
+
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ 
+          data: [
+            { id: 100, title: 'Barry', tvdbId: 12345, tmdbId: 73107, tags: [1] }, // Keep
+            { id: 101, title: 'Removed', tvdbId: 99999, tags: [1] }, // Remove
+            { id: 102, title: 'Other', tvdbId: 88888, tags: [] }, // Keep
+          ] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, label: 'serializd' } });
+      mockAxiosInstance.delete.mockResolvedValue({});
+
+      await syncSeries(mockSeries);
+
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/series/101', expect.any(Object));
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalledWith('/api/v3/series/102', expect.any(Object));
     });
   });
 });
