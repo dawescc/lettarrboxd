@@ -361,7 +361,7 @@ describe('radarr API', () => {
       mockAxiosInstance.delete.mockResolvedValueOnce({});
       await deleteMovie(1, 'Movie 1');
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/movie/1', {
-        params: { deleteFiles: false, addImportExclusion: false }
+        params: { deleteFiles: true, addImportExclusion: false }
       });
     });
 

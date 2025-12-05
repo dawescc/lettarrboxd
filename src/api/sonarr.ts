@@ -238,7 +238,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
         await retryOperation(async () => {
             await axios.delete(`/api/v3/series/${id}`, {
                 params: {
-                    deleteFiles: false,
+                    deleteFiles: true,
                     addImportExclusion: false
                 }
             });
@@ -288,7 +288,8 @@ export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
     const keepTvdbIds = new Set<number>();
 
     // 3. Process Watchlist Items (Add/Update list of "Keep" IDs)
-    await Bluebird.map(seriesList, async (item) => {
+    logger.info(`Processing ${seriesList.length} series from Serializd...`);
+    const results = await Bluebird.map(seriesList, async (item) => {
         if (!item.tmdbId) return;
         const tmdbId = parseInt(item.tmdbId);
 
@@ -297,17 +298,22 @@ export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
             const tvdbId = tmdbToTvdbMap.get(tmdbId)!;
             keepTvdbIds.add(tvdbId);
             logger.debug(`Series ${item.name} already exists in Sonarr (cached match), skipping add.`);
-            return;
+            return { tvdbId, wasAdded: false };
         }
 
         // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
         // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
         // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
-        const tvdbId = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds);
-        if (tvdbId) {
-            keepTvdbIds.add(tvdbId);
+        const result = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds);
+        if (result) {
+            keepTvdbIds.add(result.tvdbId);
+            return result;
         }
+        return null;
     }, { concurrency: 3 });
+
+    const addedCount = results.filter(r => r && r.wasAdded).length;
+    logger.info(`Finished processing series. Added ${addedCount} new series.`);
 
     // 4. Remove missing series (if enabled)
     if (env.REMOVE_MISSING_ITEMS && serializdTagId) {
@@ -330,7 +336,7 @@ export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
     }
 }
 
-async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[], existingTvdbIds: Set<number>): Promise<number | null> {
+async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[], existingTvdbIds: Set<number>): Promise<{ tvdbId: number, wasAdded: boolean } | null> {
     try {
         if (!item.tmdbId) {
             logger.warn(`Skipping ${item.name}: No TMDB ID`);
@@ -349,7 +355,7 @@ async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFo
         // Check if it already exists (using the TVDB ID we just found)
         if (existingTvdbIds.has(tvdbId)) {
             logger.debug(`Series already exists in Sonarr (lookup match): ${lookupResult.title}`);
-            return tvdbId;
+            return { tvdbId, wasAdded: false };
         }
 
         // If we are here, it's new. Add it.
@@ -370,13 +376,13 @@ async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFo
 
         if (env.DRY_RUN) {
             logger.info(payload, `[DRY RUN] Would add series to Sonarr: ${payload.title}`);
-            return tvdbId; // Return ID even in dry run so we don't try to delete it if we were simulating
+            return { tvdbId, wasAdded: false }; // Treat dry run as not added for counting purposes, or maybe true? usually dry run logs say "would add". Let's say false to avoid confusion in "Added X series" log.
         }
 
         const response = await axios.post('/api/v3/series', payload);
         logger.info(`Successfully added series: ${payload.title}`, response.data);
         
-        return tvdbId;
+        return { tvdbId, wasAdded: true };
 
     } catch (e: any) {
         logger.error(`Error adding series ${item.name}:`, e.message);

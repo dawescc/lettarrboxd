@@ -166,7 +166,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
         await retryOperation(async () => {
             await axios.delete(`/api/v3/movie/${id}`, {
                 params: {
-                    deleteFiles: false, // Don't delete files, just remove from Radarr
+                    deleteFiles: true, // Delete files from disk
                     addImportExclusion: false // Allow re-adding later
                 }
             });
@@ -205,9 +205,13 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
     logger.info(`Found ${existingMovies.length} existing movies in Radarr.`);
 
     // 2. Add new movies
-    await Bluebird.map(movies, movie => {
+    logger.info(`Processing ${movies.length} movies from Letterboxd...`);
+    const results = await Bluebird.map(movies, movie => {
         return addMovie(movie, qualityProfileId, rootFolderPath, tagIds, env.RADARR_MINIMUM_AVAILABILITY, existingMoviesMap);
-    }, { concurrency: 3 }); // Increased concurrency slightly since we have local cache
+    }, { concurrency: 3 });
+
+    const addedCount = results.filter(r => r !== undefined).length;
+    logger.info(`Finished processing movies. Added ${addedCount} new movies.`);
 
     // 3. Remove missing movies (if enabled)
     if (env.REMOVE_MISSING_ITEMS && letterboxdTagId) {

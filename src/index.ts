@@ -24,6 +24,9 @@ function scheduleNextRun() {
       scheduleNextRun();
     });
   }, intervalMs);
+  
+  const nextRun = new Date(Date.now() + intervalMs);
+  logger.info(`Next run scheduled for: ${nextRun.toLocaleString()}`);
 }
 
 async function run() {
@@ -51,6 +54,8 @@ async function run() {
       logger.error('Error in Serializd sync:', e as any);
     }
   }
+  
+  logger.info('Sync complete.');
 }
 
 export async function main() {

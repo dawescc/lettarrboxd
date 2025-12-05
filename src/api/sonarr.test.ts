@@ -127,7 +127,7 @@ describe('sonarr API', () => {
       mockAxiosInstance.delete.mockResolvedValueOnce({});
       await deleteSeries(1, 'Series 1');
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/series/1', {
-        params: { deleteFiles: false, addImportExclusion: false }
+        params: { deleteFiles: true, addImportExclusion: false }
       });
     });
 
