@@ -2,6 +2,7 @@
 const mockAxiosInstance = {
   get: jest.fn(),
   post: jest.fn(),
+  put: jest.fn(),
   delete: jest.fn(),
 };
 
@@ -218,6 +219,115 @@ describe('sonarr API', () => {
 
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/series/101', expect.any(Object));
       expect(mockAxiosInstance.delete).not.toHaveBeenCalledWith('/api/v3/series/102', expect.any(Object));
+    });
+    it('should update seasons for existing series if changed', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ 
+          data: [{ 
+            id: 100, 
+            title: 'Barry', 
+            tvdbId: 12345, 
+            tmdbId: 73107, 
+            seasons: [
+              { seasonNumber: 1, monitored: false },
+              { seasonNumber: 2, monitored: false }
+            ] 
+          }] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      const seriesWithSeasons = [{
+        ...mockSeries[0],
+        seasons: [1] // Target Season 1
+      }];
+
+      await syncSeries(seriesWithSeasons);
+
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/series/100', expect.objectContaining({
+        id: 100,
+        seasons: expect.arrayContaining([
+          expect.objectContaining({ seasonNumber: 1, monitored: true }),
+          expect.objectContaining({ seasonNumber: 2, monitored: false })
+        ])
+      }));
+    });
+
+    it('should unmonitor seasons that are no longer in the target list', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ 
+          data: [{ 
+            id: 100, 
+            title: 'Barry', 
+            tvdbId: 12345, 
+            tmdbId: 73107, 
+            seasons: [
+              { seasonNumber: 1, monitored: true }, // Was monitored
+              { seasonNumber: 2, monitored: true }  // Was monitored
+            ] 
+          }] 
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      const seriesWithSeasons = [{
+        ...mockSeries[0],
+        seasons: [2] // Now ONLY monitor Season 2 (Season 1 should become unmonitored)
+      }];
+
+      await syncSeries(seriesWithSeasons);
+
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/series/100', expect.objectContaining({
+        id: 100,
+        seasons: expect.arrayContaining([
+          expect.objectContaining({ seasonNumber: 1, monitored: false }), // Should be false now
+          expect.objectContaining({ seasonNumber: 2, monitored: true })
+        ])
+      }));
+    });
+
+    it('should add new series with specific monitored seasons', async () => {
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+        if (url === '/api/v3/series') return Promise.resolve({ data: [] });
+        if (url.includes('/series/lookup')) return Promise.resolve({ 
+          data: [{
+            title: 'Barry',
+            tvdbId: 12345,
+            seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }]
+          }]
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.post.mockResolvedValueOnce({ data: { id: 1, title: 'Barry' } });
+
+      const seriesWithSeasons = [{
+        ...mockSeries[0],
+        seasons: [2] // Only monitor Season 2
+      }];
+
+      await syncSeries(seriesWithSeasons);
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/series', expect.objectContaining({
+        title: 'Barry',
+        seasons: expect.arrayContaining([
+          expect.objectContaining({ seasonNumber: 1, monitored: false }),
+          expect.objectContaining({ seasonNumber: 2, monitored: true })
+        ])
+      }));
     });
   });
 });

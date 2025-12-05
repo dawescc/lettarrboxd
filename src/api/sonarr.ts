@@ -1,7 +1,7 @@
 import Axios from 'axios';
 import env from '../util/env';
 import logger from '../util/logger';
-import { LetterboxdMovie } from '../scraper';
+import { ScrapedSeries } from '../scraper';
 import Bluebird from 'bluebird';
 
 interface SonarrSeries {
@@ -182,10 +182,22 @@ export async function getSeriesLookup(tmdbId: string): Promise<SonarrLookupResul
     }
 }
 
-function configureSeasonMonitoring(seasons: SonarrSeason[]): Array<{ seasonNumber: number; monitored: boolean }> {
+function configureSeasonMonitoring(
+    availableSeasons: SonarrSeason[], 
+    targetSeasonNumbers?: number[]
+): Array<{ seasonNumber: number; monitored: boolean }> {
+    // If we have specific target seasons (from Serializd), use them
+    if (targetSeasonNumbers && targetSeasonNumbers.length > 0) {
+        return availableSeasons.map(season => ({
+            seasonNumber: season.seasonNumber,
+            monitored: targetSeasonNumbers.includes(season.seasonNumber)
+        }));
+    }
+
+    // Otherwise fall back to the global strategy
     const strategy = env.SONARR_SEASON_MONITORING;
     
-    return seasons.map((season: SonarrSeason, index: number) => {
+    return availableSeasons.map((season: SonarrSeason, index: number) => {
         const seasonNumber = season.seasonNumber;
         let monitored = false;
 
@@ -198,7 +210,7 @@ function configureSeasonMonitoring(seasons: SonarrSeason[]): Array<{ seasonNumbe
                 break;
             case 'latest':
                 // Monitor the last season (highest season number)
-                monitored = index === seasons.length - 1;
+                monitored = index === availableSeasons.length - 1;
                 break;
             case 'future':
                 // Monitor only seasons that haven't aired yet
@@ -250,7 +262,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
+export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
     if (!env.SONARR_QUALITY_PROFILE) {
         throw new Error('Sonarr quality profile not configured');
     }
@@ -297,14 +309,23 @@ export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
         if (tmdbToTvdbMap.has(tmdbId)) {
             const tvdbId = tmdbToTvdbMap.get(tmdbId)!;
             keepTvdbIds.add(tvdbId);
-            logger.debug(`Series ${item.name} already exists in Sonarr (cached match), skipping add.`);
+            
+            // Check if we need to update seasons
+            if (item.seasons && item.seasons.length > 0) {
+                const existingItem = existingSeries.find((s: any) => s.tvdbId === tvdbId);
+                if (existingItem) {
+                    await updateSeriesSeasonsRaw(existingItem, item.seasons);
+                }
+            }
+            
+            logger.debug(`Series ${item.name} already exists in Sonarr (cached match), checked/updated seasons.`);
             return { tvdbId, wasAdded: false };
         }
 
         // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
         // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
         // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
-        const result = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds);
+        const result = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds, existingSeries);
         if (result) {
             keepTvdbIds.add(result.tvdbId);
             return result;
@@ -336,7 +357,14 @@ export async function syncSeries(seriesList: LetterboxdMovie[]): Promise<void> {
     }
 }
 
-async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[], existingTvdbIds: Set<number>): Promise<{ tvdbId: number, wasAdded: boolean } | null> {
+async function addSeries(
+    item: ScrapedSeries, 
+    qualityProfileId: number, 
+    rootFolderPath: string, 
+    tagIds: number[], 
+    existingTvdbIds: Set<number>,
+    allExistingSeries: any[]
+): Promise<{ tvdbId: number, wasAdded: boolean } | null> {
     try {
         if (!item.tmdbId) {
             logger.warn(`Skipping ${item.name}: No TMDB ID`);
@@ -355,11 +383,18 @@ async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFo
         // Check if it already exists (using the TVDB ID we just found)
         if (existingTvdbIds.has(tvdbId)) {
             logger.debug(`Series already exists in Sonarr (lookup match): ${lookupResult.title}`);
+            // If seasons are provided, we should check/update them here too (edge case where tmdb map missed it but it exists)
+            if (item.seasons && item.seasons.length > 0) {
+                 const existingItem = allExistingSeries.find((s: any) => s.tvdbId === tvdbId);
+                 if (existingItem) {
+                     await updateSeriesSeasonsRaw(existingItem, item.seasons);
+                 }
+            }
             return { tvdbId, wasAdded: false };
         }
 
         // If we are here, it's new. Add it.
-        const seasons = configureSeasonMonitoring(lookupResult.seasons || []);
+        const seasons = configureSeasonMonitoring(lookupResult.seasons || [], item.seasons);
 
         const payload: SonarrSeries = {
             title: lookupResult.title,
@@ -387,5 +422,41 @@ async function addSeries(item: LetterboxdMovie, qualityProfileId: number, rootFo
     } catch (e: any) {
         logger.error(`Error adding series ${item.name}:`, e.message);
         return null;
+    }
+}
+
+async function updateSeriesSeasonsRaw(existingSeries: any, targetSeasons: number[]): Promise<void> {
+    try {
+        if (!existingSeries || !existingSeries.seasons) return;
+
+        let needsUpdate = false;
+        const newSeasons = existingSeries.seasons.map((season: any) => {
+            const shouldBeMonitored = targetSeasons.includes(season.seasonNumber);
+            
+            if (season.monitored !== shouldBeMonitored) {
+                needsUpdate = true;
+                return { ...season, monitored: shouldBeMonitored };
+            }
+            return season;
+        });
+
+        if (needsUpdate) {
+            if (env.DRY_RUN) {
+                logger.info(`[DRY RUN] Would update seasons for ${existingSeries.title} to: ${targetSeasons.join(', ')}`);
+                return;
+            }
+
+            logger.info(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
+            // Update the series in Sonarr
+            // We need to send the full series object back, but with updated seasons
+            const updatePayload = {
+                ...existingSeries,
+                seasons: newSeasons
+            };
+
+            await axios.put(`/api/v3/series/${existingSeries.id}`, updatePayload);
+        }
+    } catch (e: any) {
+        logger.error(`Error updating seasons for ${existingSeries.title}:`, e.message);
     }
 }

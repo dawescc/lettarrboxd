@@ -13,6 +13,15 @@ jest.mock('../util/logger', () => ({
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
+// Mock fs
+jest.mock('fs', () => ({
+  existsSync: jest.fn(() => false), // No cache file exists by default
+  readFileSync: jest.fn(),
+  writeFileSync: jest.fn(),
+  mkdirSync: jest.fn(),
+}));
+import fs from 'fs';
+
 describe('SerializdScraper', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -49,12 +58,14 @@ describe('SerializdScraper', () => {
       name: 'Barry',
       tmdbId: '73107',
       slug: 'barry',
+      seasons: []
     });
     expect(series[1]).toEqual({
       id: 66732,
       name: 'Stranger Things',
       tmdbId: '66732',
       slug: 'stranger-things',
+      seasons: []
     });
 
     expect(mockedAxios.get).toHaveBeenCalledWith(
@@ -103,5 +114,42 @@ describe('SerializdScraper', () => {
     const scraper = new SerializdScraper('https://www.serializd.com/user/dawescc/watchlist');
 
     await expect(scraper.getSeries()).rejects.toThrow('Network error');
+  });
+
+
+  it('should resolve season numbers from cache/api', async () => {
+    // Mock the watchlist response
+    mockedAxios.get.mockImplementation((url) => {
+      if (url.includes('watchlistpage_v2')) {
+        return Promise.resolve({
+          data: {
+            items: [{ showId: 999, showName: 'Test Show', seasonIds: [100, 200] }],
+            totalPages: 1,
+            numberOfShows: 1
+          }
+        });
+      }
+      if (url.includes('/api/show/999')) {
+        return Promise.resolve({
+          data: {
+            seasons: [
+              { id: 100, seasonNumber: 1 },
+              { id: 200, seasonNumber: 2 }
+            ]
+          }
+        });
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    const scraper = new SerializdScraper('https://www.serializd.com/user/dawescc/watchlist');
+    const series = await scraper.getSeries();
+
+    expect(series).toHaveLength(1);
+    expect(series[0].seasons).toEqual([1, 2]);
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining('/api/show/999'), 
+      expect.anything()
+    );
   });
 });

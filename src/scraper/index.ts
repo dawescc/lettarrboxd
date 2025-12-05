@@ -3,13 +3,20 @@ import { CollectionsScraper } from './collections';
 import { PopularScraper } from './popular';
 import env from '../util/env';
 
-export interface LetterboxdMovie {
+export interface ScrapedMedia {
     id: number;
     name: string;
-    imdbId?: string|null;
     tmdbId?: string|null;
-    publishedYear?: number|null;
     slug: string;
+}
+
+export interface LetterboxdMovie extends ScrapedMedia {
+    imdbId?: string|null;
+    publishedYear?: number|null;
+}
+
+export interface ScrapedSeries extends ScrapedMedia {
+    seasons?: number[];
 }
 
 export enum ListType {

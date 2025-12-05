@@ -24,7 +24,8 @@ const envSchema = z.object({
   LETTERBOXD_TAKE_AMOUNT: z.string().optional().transform(val => val ? Number(val) : undefined).pipe(z.number().positive().optional()),
   LETTERBOXD_TAKE_STRATEGY: z.enum(['oldest', 'newest']).optional(),
   DRY_RUN: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
-  REMOVE_MISSING_ITEMS: z.string().default('false').transform(val => val.toLowerCase() === 'true')
+  REMOVE_MISSING_ITEMS: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
+  DATA_DIR: z.string().default('./data')
 }).refine(data => {
   // Validate Letterboxd/Radarr pairing
   if (data.LETTERBOXD_URL) {
