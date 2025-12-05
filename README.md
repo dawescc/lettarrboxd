@@ -285,15 +285,9 @@ bun run start:dev
 
 ```bash
 bun run start:dev    # Run with auto-reload
-bun run build        # Type check (tsc)
+bun run typecheck    # Type check (tsc)
+bun run test         # Run tests (Jest)
 ```
-
-### Development Mode
-
-When `NODE_ENV=development`, the application:
-- Only processes the first 5 movies (for faster testing)
-- Uses more verbose logging
-- Includes additional debug information
 
 ## Contributing
 

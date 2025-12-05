@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lettarrboxd is a TypeScript Node.js application that automatically syncs Letterboxd watchlist movies to Radarr. It continuously monitors a user's Letterboxd watchlist for new additions and automatically adds them to Radarr for download management.
+Lettarrboxd is a TypeScript Bun application that automatically syncs Letterboxd watchlist movies to Radarr and Serializd TV shows to Sonarr. It continuously monitors a user's watchlists for new additions and automatically adds them to the respective media managers.
 
 ## Commands
 
@@ -12,7 +12,8 @@ Lettarrboxd is a TypeScript Node.js application that automatically syncs Letterb
 - `bun install` - Install dependencies
 - `bun start` - Run the application
 - `bun run start:dev` - Run with auto-reload
-- `bun run build` - Type check (tsc)
+- `bun run typecheck` - Type check (tsc)
+- `bun run test` - Run tests (Jest)
 
 ### Docker
 - `docker build -t lettarrboxd .` - Build Docker image
@@ -23,10 +24,15 @@ Lettarrboxd is a TypeScript Node.js application that automatically syncs Letterb
 The application uses Zod for strict environment variable validation in `src/env.ts`. All environment variables are validated at startup and the application will exit with detailed error messages if validation fails.
 
 Required variables:
-- `LETTERBOXD_URL` - Letterboxd list URL for scraping (supports watchlists, regular lists, watched movies, filmographies, collections, etc.)
+- `LETTERBOXD_URL` - Letterboxd list URL
 - `RADARR_API_URL` - Base URL of Radarr instance  
 - `RADARR_API_KEY` - Radarr API key
 - `RADARR_QUALITY_PROFILE` - Quality profile name (case-sensitive)
+- `SERIALIZD_URL` - Serializd watchlist URL
+- `SONARR_API_URL` - Base URL of Sonarr instance
+- `SONARR_API_KEY` - Sonarr API key
+- `SONARR_QUALITY_PROFILE` - Quality profile name
+- `SONARR_ROOT_FOLDER_PATH` - Root folder path for series
 
 Key validation rules:
 - `CHECK_INTERVAL_MINUTES` enforces minimum 10 minutes
@@ -38,31 +44,20 @@ Key validation rules:
 ### Core Application Flow
 The application follows a scheduled monitoring pattern:
 1. **Scheduler** (`startScheduledMonitoring`) runs `processWatchlist()` at configured intervals
-2. **Incremental Processing** - Only new movies (not in previous `movies.json`) are processed
+2. **Stateless Sync** - Fetches all items from source and destination to determine what needs adding/removing
 3. **Rate Limiting** - Built-in delays between API calls to respect external services
-4. **Persistent State** - Tracks processed movies in `DATA_DIR/movies.json` to avoid reprocessing
 
 ### Module Separation
 - **`src/index.ts`** - Main orchestration, scheduling, and file I/O operations
-- **`src/letterboxd.ts`** - Web scraping and TMDB ID extraction logic
-- **`src/radarr.ts`** - Radarr API integration and movie management
-- **`src/env.ts`** - Environment validation and configuration management
+- **`src/scraper/index.ts`** - Scraper factory and routing logic
+- **`src/scraper/serializd.ts`** - Serializd API client
+- **`src/api/radarr.ts`** - Radarr API integration
+- **`src/api/sonarr.ts`** - Sonarr API integration
+- **`src/util/env.ts`** - Environment validation and configuration management
 
 ### Key Architectural Patterns
 
-**State Management**: The application maintains state through a `movies.json` file containing:
-```typescript
-interface MoviesData {
-  timestamp: string;
-  queryDate: string; 
-  totalMovies: number;
-  movies: Movie[];
-}
-```
-
 **Error Handling**: Each module handles errors gracefully without crashing the scheduler. Network failures and API errors are logged but don't stop the monitoring process.
-
-**Development Mode**: When `NODE_ENV=development`, the application limits processing to the first 5 movies for faster testing cycles.
 
 **Radarr Integration**: Movies are added with:
 - Specified quality profile from environment
@@ -70,6 +65,12 @@ interface MoviesData {
 - Automatic monitoring and search enabled
 - Configurable minimum availability settings
 - Optional cleanup of items removed from watchlist (via `REMOVE_MISSING_ITEMS`)
+
+**Sonarr Integration**: Series are added with:
+- Specified quality profile and root folder
+- "serializd-watchlist" tag
+- Season monitoring strategy (all, first, latest, future, none)
+- Automatic search for missing episodes
 
 ### Web Scraping Strategy
 Letterboxd scraping is implemented with:
