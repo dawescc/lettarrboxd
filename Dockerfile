@@ -43,7 +43,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=5m --timeout=30s --start-period=5s --retries=3 \
-  CMD bun -e "console.log('Health check passed')" || exit 1
+  CMD bun -e "fetch('http://localhost:3000/health').then(r => r.ok ? process.exit(0) : process.exit(1))" || exit 1
 
 # Start the application
 CMD ["bun", "start"]

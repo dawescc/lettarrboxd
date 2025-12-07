@@ -9,7 +9,7 @@ jest.mock('../util/logger', () => ({
 }));
 
 // Mock fetch globally
-global.fetch = jest.fn();
+global.fetch = jest.fn() as unknown as typeof fetch;
 
 describe('movie scraper', () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -64,7 +64,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -88,7 +88,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -112,7 +112,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -123,7 +123,7 @@ describe('movie scraper', () => {
     });
 
     it('should throw error when fetch fails', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: false,
         status: 404,
         statusText: 'Not Found',
@@ -143,7 +143,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -165,7 +165,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -188,7 +188,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -211,7 +211,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });
@@ -234,7 +234,7 @@ describe('movie scraper', () => {
         </html>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: async () => mockHtml,
       });

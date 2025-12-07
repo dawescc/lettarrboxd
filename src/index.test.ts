@@ -16,6 +16,13 @@ jest.mock('./util/logger', () => ({
 jest.mock('./scraper');
 jest.mock('./api/radarr');
 
+// Mock health
+jest.mock('./api/health', () => ({
+  startHealthServer: jest.fn(),
+  setAppStatus: jest.fn(),
+  updateComponentStatus: jest.fn()
+}));
+
 describe('main application', () => {
   beforeEach(() => {
     jest.clearAllMocks();

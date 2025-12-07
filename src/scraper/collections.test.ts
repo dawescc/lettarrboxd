@@ -13,7 +13,7 @@ jest.mock('../util/logger', () => ({
 jest.mock('./movie');
 
 // Mock global fetch
-global.fetch = jest.fn();
+global.fetch = jest.fn() as unknown as typeof fetch;
 
 describe('CollectionsScraper', () => {
   beforeEach(() => {
@@ -27,7 +27,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie2/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -55,7 +55,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie1/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -83,7 +83,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie1/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -121,7 +121,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie3/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -156,7 +156,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie5/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -184,7 +184,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie1/"></div>
       `;
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: true,
         text: async () => mockHtml,
       });
@@ -223,7 +223,7 @@ describe('CollectionsScraper', () => {
         <div class="react-component" data-target-link="/film/movie2/"></div>
       `;
 
-      (global.fetch as jest.Mock)
+      (global.fetch as unknown as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           text: async () => mockHtml1,
@@ -250,7 +250,7 @@ describe('CollectionsScraper', () => {
     });
 
     it('should throw error for fetch failure', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      (global.fetch as unknown as jest.Mock).mockResolvedValue({
         ok: false,
         status: 404,
       });
