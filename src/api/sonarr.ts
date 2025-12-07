@@ -1,5 +1,6 @@
 import Axios from 'axios';
 import env from '../util/env';
+import config from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
 import Bluebird from 'bluebird';
@@ -263,22 +264,59 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
 }
 
 export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
-    if (!env.SONARR_QUALITY_PROFILE) {
+    const sonarrConfig = config.sonarr;
+    // Fallback to ENV if config absent
+    const qualityProfileName = sonarrConfig?.qualityProfile || env.SONARR_QUALITY_PROFILE;
+
+    if (!qualityProfileName) {
         throw new Error('Sonarr quality profile not configured');
     }
 
-    const qualityProfileId = await getQualityProfileId(env.SONARR_QUALITY_PROFILE);
+    const qualityProfileId = await getQualityProfileId(qualityProfileName);
     if (!qualityProfileId) {
-        throw new Error(`Could not find Sonarr quality profile: ${env.SONARR_QUALITY_PROFILE}`);
+        throw new Error(`Could not find Sonarr quality profile: ${qualityProfileName}`);
     }
 
-    const rootFolderPath = !env.SONARR_ROOT_FOLDER_ID ? await getRootFolder() : await getRootFolderById(env.SONARR_ROOT_FOLDER_ID);
+    const rootFolderConfig = sonarrConfig?.rootFolder || env.SONARR_ROOT_FOLDER_ID;
+    const rootFolderPath = !rootFolderConfig ? await getRootFolder() : 
+                           (rootFolderConfig.startsWith('/') ? rootFolderConfig : await getRootFolderById(rootFolderConfig));
+
     if (!rootFolderPath) {
         throw new Error('Could not get Sonarr root folder');
     }
 
-    const tagIds = await getAllRequiredTagIds();
-    const serializdTagId = await getOrCreateTag(DEFAULT_TAG_NAME);
+    // --- Tag Resolution ---
+
+    // 1. Resolve System Tags (Config + Global Env)
+    // We combine env.SONARR_TAGS and config.sonarr.tags
+    const envTags = (env.SONARR_TAGS || '').split(',').map(t => t.trim()).filter(t => t.length > 0);
+    const configTags = sonarrConfig?.tags || [];
+    const systemTagNames = [...new Set([DEFAULT_TAG_NAME, ...envTags, ...configTags])];
+
+    // 2. Resolve Per-Series Tags
+    const seriesTagNames = new Set<string>();
+    seriesList.forEach(s => {
+        if (s.tags) {
+            s.tags.forEach(t => seriesTagNames.add(t));
+        }
+    });
+
+    // 3. Create IDs for ALL unique tags found
+    const allUniqueTags = new Set([...systemTagNames, ...seriesTagNames]);
+    const tagMap = new Map<string, number>();
+
+    logger.info(`Resolving ${allUniqueTags.size} tags for Sonarr...`);
+    for (const tagName of allUniqueTags) {
+        const id = await getOrCreateTag(tagName);
+        if (id) {
+            tagMap.set(tagName, id);
+        }
+    }
+
+    const startSystemTagIds = systemTagNames.map(name => tagMap.get(name)).filter((id): id is number => id !== undefined);
+    const serializdTagId = tagMap.get(DEFAULT_TAG_NAME);
+
+    // --- Sync Logic ---
 
     // 1. Fetch all existing series
     logger.info('Fetching existing series from Sonarr...');
@@ -305,6 +343,14 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         if (!item.tmdbId) return;
         const tmdbId = parseInt(item.tmdbId);
 
+        // Calculate tags for this specific series
+        const seriesSpecificTagIds = (item.tags || [])
+            .map(t => tagMap.get(t))
+            .filter((id): id is number => id !== undefined);
+        
+        // Merge system tags + series tags
+        const finalTagIds = [...new Set([...startSystemTagIds, ...seriesSpecificTagIds])];
+
         // Optimization: If we already know the TVDB ID from our local map, use it
         if (tmdbToTvdbMap.has(tmdbId)) {
             const tvdbId = tmdbToTvdbMap.get(tmdbId)!;
@@ -325,7 +371,7 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
         // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
         // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
-        const result = await addSeries(item, qualityProfileId, rootFolderPath, tagIds, existingTvdbIds, existingSeries);
+        const result = await addSeries(item, qualityProfileId, rootFolderPath, finalTagIds, existingTvdbIds, existingSeries);
         if (result) {
             keepTvdbIds.add(result.tvdbId);
             return result;

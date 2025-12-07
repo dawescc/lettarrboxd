@@ -257,6 +257,66 @@ At least one pair of source/destination variables must be configured.
 | `REMOVE_MISSING_ITEMS` | `false` | When `true`, removes items from Radarr/Sonarr that are no longer in the watchlist (requires `letterboxd`/`serializd` tag) |
 | `DATA_DIR` | `/data` | Directory for storing application data. You generally do not need to worry about this. |
 
+## Advanced Configuration (config.yaml)
+
+For more complex setups, such as monitoring multiple lists with different rules, you can use a `config.yaml` file in the root directory (or mounted via Docker).
+
+This configuration method allows you to:
+- Monitor multiple Letterboxd and Serializd lists without running multiple containers.
+- Apply filters (e.g., Minimum Rating, Release Year).
+- Use specific tags for each list.
+
+### Example `config.yaml`
+
+```yaml
+letterboxd:
+  - url: https://letterboxd.com/user/list/horror-gems/
+    takeAmount: 10
+    takeStrategy: newest
+    tags: 
+      - horror
+      - gems
+    filters:
+      minRating: 7.0 
+      minYear: 1980
+      maxYear: 2024
+
+  - url: https://letterboxd.com/user/watchlist/
+    tags: 
+      - watchlist
+    # No filters = grab everything
+
+serializd:
+  - url: https://www.serializd.com/user/username/watchlist
+    tags: 
+      - tv-watchlist
+
+radarr:
+  qualityProfile: "Ultra HD"
+  rootFolder: "/movies"  # Or use ID: 1
+  tags: [ "global-tag" ]
+
+sonarr:
+   qualityProfile: "HD-1080p"
+   rootFolder: "/tv"
+   tags: [ "global-tag" ]
+```
+
+### Docker Usage with Config URL
+
+Mount your config file to `/app/config.yaml` (or rely on the default check in root if you build your own image, but mounting is preferred).
+
+```bash
+docker run -d \
+  --name lettarrboxd \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -e RADARR_API_URL=... \
+  -e RADARR_API_KEY=... \
+  ryanpage/lettarrboxd:latest
+```
+
+*Note: You still need to provide invalid env vars for API keys if you don't put them in the config file (recommended to keep keys in ENV).*
+
 ## Development
 
 ### Prerequisites

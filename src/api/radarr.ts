@@ -1,5 +1,6 @@
 import Axios from 'axios';
 import env from '../util/env';
+import config from '../util/config';
 import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
 import Bluebird from 'bluebird';
@@ -179,23 +180,59 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
 }
 
 export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
-    if (!env.RADARR_QUALITY_PROFILE) {
+    const radarrConfig = config.radarr;
+    // Fallback to ENV if config absent
+    const qualityProfileName = radarrConfig?.qualityProfile || env.RADARR_QUALITY_PROFILE;
+    
+    if (!qualityProfileName) {
         throw new Error('Radarr quality profile not configured');
     }
-    const qualityProfileId = await getQualityProfileId(env.RADARR_QUALITY_PROFILE);
+    const qualityProfileId = await getQualityProfileId(qualityProfileName);
 
     if (!qualityProfileId) {
         throw new Error('Could not get quality profile ID.');
     }
 
-    const rootFolderPath = !env.RADARR_ROOT_FOLDER_ID ? await getRootFolder() : await getRootFolderById(env.RADARR_ROOT_FOLDER_ID);
+    const rootFolderConfig = radarrConfig?.rootFolder || env.RADARR_ROOT_FOLDER_ID;
+    const rootFolderPath = !rootFolderConfig ? await getRootFolder() : 
+                           (rootFolderConfig.startsWith('/') ? rootFolderConfig : await getRootFolderById(rootFolderConfig));
 
     if (!rootFolderPath) {
         throw new Error('Could not get root folder');
     }
 
-    const tagIds = await getAllRequiredTagIds();
-    const letterboxdTagId = await getOrCreateTag(DEFAULT_TAG_NAME); // We need this specific tag for cleanup
+    // --- Tag Resolution ---
+
+    // 1. Resolve System Tags (Config + Global Env)
+    // We combine env.RADARR_TAGS and config.radarr.tags
+    const envTags = (env.RADARR_TAGS || '').split(',').map(t => t.trim()).filter(t => t.length > 0);
+    const configTags = radarrConfig?.tags || [];
+    const systemTagNames = [...new Set([DEFAULT_TAG_NAME, ...envTags, ...configTags])];
+
+    // 2. Resolve Per-Movie Tags
+    const movieTagNames = new Set<string>();
+    movies.forEach(m => {
+        if (m.tags) {
+            m.tags.forEach(t => movieTagNames.add(t));
+        }
+    });
+
+    // 3. Create IDs for ALL unique tags found
+    const allUniqueTags = new Set([...systemTagNames, ...movieTagNames]);
+    const tagMap = new Map<string, number>();
+
+    logger.info(`Resolving ${allUniqueTags.size} tags...`);
+    for (const tagName of allUniqueTags) {
+        const id = await getOrCreateTag(tagName);
+        if (id) {
+            tagMap.set(tagName, id);
+        }
+    }
+
+    const startSystemTagIds = systemTagNames.map(name => tagMap.get(name)).filter((id): id is number => id !== undefined);
+    const letterboxdTagId = tagMap.get(DEFAULT_TAG_NAME);
+
+    // --- Sync Logic ---
 
     // 1. Fetch all existing movies from Radarr
     logger.info('Fetching existing movies from Radarr...');
@@ -207,7 +244,15 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
     // 2. Add new movies
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
     const results = await Bluebird.map(movies, movie => {
-        return addMovie(movie, qualityProfileId, rootFolderPath, tagIds, env.RADARR_MINIMUM_AVAILABILITY, existingMoviesMap);
+        // Calculate tags for this specific movie
+        const movieSpecificTagIds = (movie.tags || [])
+            .map(t => tagMap.get(t))
+            .filter((id): id is number => id !== undefined);
+        
+        // Merge system tags + movie tags
+        const finalTagIds = [...new Set([...startSystemTagIds, ...movieSpecificTagIds])];
+
+        return addMovie(movie, qualityProfileId, rootFolderPath, finalTagIds, env.RADARR_MINIMUM_AVAILABILITY, existingMoviesMap);
     }, { concurrency: 3 });
 
     const addedCount = results.filter(r => r !== undefined).length;

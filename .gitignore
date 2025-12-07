@@ -50,3 +50,5 @@ tmp/
 temp/
 data/
 package-lock.json
+config.yaml
+config/config.yaml

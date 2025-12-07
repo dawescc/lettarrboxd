@@ -1,159 +1,160 @@
-import { main, startScheduledMonitoring } from './index';
+import { startScheduledMonitoring, main } from './index';
 import * as scraperModule from './scraper';
 import * as radarrModule from './api/radarr';
+import * as serializdScraper from './scraper/serializd';
+import * as sonarrModule from './api/sonarr';
 
 // Mock dependencies
 jest.mock('./util/env', () => ({
   CHECK_INTERVAL_MINUTES: 10,
-  LETTERBOXD_URL: 'https://letterboxd.com/user/watchlist',
+  // These are kept for legacy path testing, but config mock overrides for most
+  LETTERBOXD_URL: 'https://letterboxd.com/user/watchlist', 
+  SERIALIZD_URL: 'https://serializd.com/user/watchlist',
+  RADARR_TAGS: 'env_tag'
 }));
+
+jest.mock('./util/config', () => ({
+  default: {
+    letterboxd: [],
+    serializd: [],
+    radarr: undefined,
+    sonarr: undefined
+  }
+}));
+
+import config from './util/config';
+
 jest.mock('./util/logger', () => ({
   debug: jest.fn(),
   info: jest.fn(),
   warn: jest.fn(),
   error: jest.fn(),
 }));
+
 jest.mock('./scraper');
 jest.mock('./api/radarr');
+jest.mock('./scraper/serializd');
+jest.mock('./api/sonarr');
 
-// Mock health
 jest.mock('./api/health', () => ({
   startHealthServer: jest.fn(),
   setAppStatus: jest.fn(),
   updateComponentStatus: jest.fn()
 }));
 
-describe('main application', () => {
+describe('main application logic', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    // Reset config mock state if needed
+    config.letterboxd = [{ url: 'https://list-a', tags: ['tag-a'], filters: undefined }];
+    config.serializd = [];
   });
 
   afterEach(() => {
     jest.useRealTimers();
   });
 
-  describe('startScheduledMonitoring', () => {
-    it('should run immediately and schedule future runs', async () => {
-      const mockMovies = [
-        {
-          id: 1,
-          name: 'Test Movie',
-          slug: '/film/test-movie/',
-          tmdbId: '123',
-          imdbId: null,
-          publishedYear: null,
-        },
+  describe('Multiple Lists & Tag Merging', () => {
+    it('should aggregate movies from multiple lists and merge tags', async () => {
+      // Setup Config with 2 lists
+      config.letterboxd = [
+        { url: 'https://list-a', tags: ['horror'], filters: undefined },
+        { url: 'https://list-b', tags: ['watchlist'], filters: undefined }
       ];
 
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
+      // Mock Scraper Responses
+      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockImplementation(async (url) => {
+        if (url === 'https://list-a') {
+          return [{ tmdbId: '100', name: 'Movie 100', tags: [] }];
+        }
+        if (url === 'https://list-b') {
+          return [
+            { tmdbId: '100', name: 'Movie 100', tags: [] }, // Duplicate
+            { tmdbId: '200', name: 'Movie 200', tags: [] }
+          ];
+        }
+        return [];
+      });
+
       (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
-      startScheduledMonitoring();
+      await startScheduledMonitoring(); // Triggers run()
 
-      // Wait for the immediate run to complete
-      await Promise.resolve();
+      await Promise.resolve(); // wait for run promise
 
-      // Verify run was called immediately
-      expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalledTimes(1);
-      expect(radarrModule.syncMovies).toHaveBeenCalledTimes(1);
-    });
-
-    it('should fetch movies and upsert them during run', async () => {
-      const mockMovies = [
-        {
-          id: 1,
-          name: 'Movie 1',
-          slug: '/film/movie1/',
-          tmdbId: '123',
-          imdbId: null,
-          publishedYear: null,
-        },
-        {
-          id: 2,
-          name: 'Movie 2',
-          slug: '/film/movie2/',
-          tmdbId: '456',
-          imdbId: null,
-          publishedYear: null,
-        },
-      ];
-
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
-
-      startScheduledMonitoring();
-
-      // Wait for the immediate run to complete
-      await Promise.resolve();
-
-      expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalledWith(
-        'https://letterboxd.com/user/watchlist'
-      );
-      expect(radarrModule.syncMovies).toHaveBeenCalledWith(mockMovies);
-    });
-
-    it('should call fetchMoviesFromUrl and upsertMovies during scheduled run', async () => {
-      const mockMovies = [
-        {
-          id: 1,
-          name: 'Test Movie',
-          slug: '/film/test-movie/',
-          tmdbId: '123',
-          imdbId: null,
-          publishedYear: null,
-        },
-      ];
-
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
-
-      startScheduledMonitoring();
-
-      // Wait for immediate run to complete and finally block to execute
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // Clear mocks to test scheduled callback
-      jest.clearAllMocks();
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
-
-      // Fast-forward time by 10 minutes (600000ms)
-      jest.advanceTimersByTime(600000);
+      expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalledTimes(2);
       
-      // Allow the scheduled run to execute
-      await Promise.resolve();
-      await Promise.resolve();
+      expect(radarrModule.syncMovies).toHaveBeenCalledTimes(1);
+      
+      // Verify the passed payload to syncMovies
+      const calls = (radarrModule.syncMovies as jest.Mock).mock.calls[0];
+      const movies = calls[0];
+      
+      expect(movies).toHaveLength(2);
+      
+      const movie100 = movies.find((m: any) => m.tmdbId === '100');
+      const movie200 = movies.find((m: any) => m.tmdbId === '200');
 
-      // Verify the scheduled callback also calls the functions
-      expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalled();
-      expect(radarrModule.syncMovies).toHaveBeenCalled();
+      // Movie 100 should have BOTH tags
+      expect(movie100.tags).toEqual(expect.arrayContaining(['horror', 'watchlist']));
+      
+      // Movie 200 should have only list-b tag
+      expect(movie200.tags).toEqual(['watchlist']);
     });
   });
 
-  describe('main', () => {
-    it('should call startScheduledMonitoring', async () => {
-      const mockMovies = [
-        {
-          id: 1,
-          name: 'Test Movie',
-          slug: '/film/test-movie/',
-          tmdbId: '123',
-          imdbId: null,
-          publishedYear: null,
-        },
+  describe('Filtering', () => {
+    it('should filter movies by minRating', async () => {
+      config.letterboxd = [
+        { 
+          url: 'https://rated-list', 
+          tags: [], 
+          filters: { minRating: 7.0 } as any 
+        }
       ];
 
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue(mockMovies);
-      (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
+      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
+        { tmdbId: '1', name: 'Good Movie', rating: 8.0 },
+        { tmdbId: '2', name: 'Bad Movie', rating: 4.0 },
+        { tmdbId: '3', name: 'Unknown Rating', rating: null }
+      ]);
 
-      await main();
+      await startScheduledMonitoring();
       await Promise.resolve();
 
-      expect(scraperModule.fetchMoviesFromUrl).toHaveBeenCalled();
-      expect(radarrModule.syncMovies).toHaveBeenCalled();
+      const calls = (radarrModule.syncMovies as jest.Mock).mock.calls[0];
+      const movies = calls[0];
+
+      // Should only keep 'Good Movie' (8.0 >= 7.0). Unknown rating is strict excluded.
+      expect(movies).toHaveLength(1);
+      expect(movies[0].name).toBe('Good Movie');
+    });
+
+    it('should filter movies by year range', async () => {
+      config.letterboxd = [
+        { 
+          url: 'https://year-list', 
+          tags: [], 
+          filters: { minYear: 2000, maxYear: 2010 } as any 
+        }
+      ];
+
+      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
+        { tmdbId: '1', name: '90s Movie', publishedYear: 1999 },
+        { tmdbId: '2', name: '2000s Movie', publishedYear: 2005 },
+        { tmdbId: '3', name: 'New Movie', publishedYear: 2024 },
+        { tmdbId: '4', name: 'Unknown Year', publishedYear: null }
+      ]);
+
+      await startScheduledMonitoring();
+      await Promise.resolve();
+
+      const calls = (radarrModule.syncMovies as jest.Mock).mock.calls[0];
+      const movies = calls[0];
+
+      expect(movies).toHaveLength(1);
+      expect(movies[0].name).toBe('2000s Movie');
     });
   });
 });

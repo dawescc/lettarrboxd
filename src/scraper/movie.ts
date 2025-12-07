@@ -26,6 +26,7 @@ function extractMovieFromHtml(slug: string, html: string): LetterboxdMovie {
     const imdbId = extractImdbId($);
     const id = extractLetterboxdId($);
     const year = extractPublishedYear($);
+    const rating = extractRating($);
     
     const letterboxdResult = {
         id,
@@ -33,10 +34,37 @@ function extractMovieFromHtml(slug: string, html: string): LetterboxdMovie {
         imdbId,
         tmdbId,
         publishedYear: year,
+        rating,
         slug
     };
 
     return letterboxdResult;
+}
+
+function extractRating($: cheerio.CheerioAPI): number|null {
+    // Try JSON-LD first (most reliable)
+    try {
+        const jsonLdScript = $('script[type="application/ld+json"]');
+        if (jsonLdScript.length) {
+            const data = JSON.parse(jsonLdScript.first().html() || '{}');
+            if (data.aggregateRating && data.aggregateRating.ratingValue) {
+                return parseFloat(data.aggregateRating.ratingValue);
+            }
+        }
+    } catch (e) {
+        logger.debug('Failed to parse JSON-LD for rating');
+    }
+
+    // Fallback to meta tag (twitter:data2 = "3.5 out of 5")
+    const metaRating = $('meta[name="twitter:data2"]').attr('content');
+    if (metaRating) {
+        const match = metaRating.match(/([\d.]+) out of 5/);
+        if (match) {
+            return parseFloat(match[1]);
+        }
+    }
+
+    return null;
 }
 
 function extractName($: cheerio.CheerioAPI): string {

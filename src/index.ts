@@ -2,6 +2,7 @@ require('dotenv').config();
 
 
 import env from './util/env';
+import config from './util/config';
 import logger from './util/logger';
 import { fetchMoviesFromUrl } from './scraper';
 import { syncMovies } from './api/radarr';
@@ -37,23 +38,82 @@ function scheduleNextRun() {
 
 async function run() {
   // Letterboxd -> Radarr
-  if (env.LETTERBOXD_URL) {
-    try {
-      logger.info('Starting Letterboxd sync...');
-      const movies = await fetchMoviesFromUrl(env.LETTERBOXD_URL);
-      updateComponentStatus('letterboxd', 'ok', `Found ${movies.length} movies`);
-      logger.info(`Found ${movies.length} movies in Letterboxd list`);
-      
+  // Letterboxd -> Radarr
+  if (config.letterboxd.length > 0) {
+    let hasError = false;
+    const allMovies = new Map<string, any>(); // TMDB ID -> Movie
+
+    logger.info(`Processing ${config.letterboxd.length} Letterboxd lists...`);
+
+    for (const list of config.letterboxd) {
       try {
-        await syncMovies(movies);
-        updateComponentStatus('radarr', 'ok');
+        logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+        const movies = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
+        
+        for (const movie of movies) {
+          // Client-side filtering
+          if (list.filters) {
+              const { minRating, minYear, maxYear } = list.filters;
+              
+              if (minRating !== undefined) {
+                  // If movie has no rating, we exclude it if a minRating is requested (strict)
+                  if (movie.rating === undefined || movie.rating === null || movie.rating < minRating) {
+                      continue;
+                  }
+              }
+
+              if (minYear !== undefined) {
+                  if (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear < minYear) {
+                      continue;
+                  }
+              }
+
+              if (maxYear !== undefined) {
+                  if (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear > maxYear) {
+                      continue;
+                  }
+              }
+          }
+
+          if (!movie.tmdbId) continue;
+
+          // Merge Logic
+          if (allMovies.has(movie.tmdbId)) {
+            const existing = allMovies.get(movie.tmdbId);
+            const existingTags = existing.tags || [];
+            const newTags = list.tags || [];
+            existing.tags = [...new Set([...existingTags, ...newTags])];
+          } else {
+            movie.tags = [...(list.tags || [])];
+            allMovies.set(movie.tmdbId, movie);
+          }
+        }
+        logger.info(`Fetched ${movies.length} movies from list.`);
       } catch (e: any) {
-        updateComponentStatus('radarr', 'error', e.message);
-        throw e; // Re-throw to be caught by outer catch
+        logger.error(`Error fetching list ${list.url}:`, e);
+        hasError = true;
       }
-    } catch (e) {
-      logger.error('Error in Letterboxd sync:', e as any);
-      updateComponentStatus('letterboxd', 'error', (e as any).message);
+    }
+
+    const uniqueMovies = Array.from(allMovies.values());
+
+    if (uniqueMovies.length > 0) {
+        updateComponentStatus('letterboxd', hasError ? 'error' : 'ok', `Found ${uniqueMovies.length} unique movies`);
+        logger.info(`Total unique movies found across all lists: ${uniqueMovies.length}`);
+        
+        try {
+            await syncMovies(uniqueMovies);
+            updateComponentStatus('radarr', 'ok');
+        } catch (e: any) {
+            updateComponentStatus('radarr', 'error', e.message);
+            throw e; 
+        }
+    } else {
+        if (hasError) {
+             updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
+        } else {
+             updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
+        }
     }
   } else {
       updateComponentStatus('letterboxd', 'disabled');
@@ -61,24 +121,58 @@ async function run() {
   }
 
   // Serializd -> Sonarr
-  if (env.SERIALIZD_URL) {
-    try {
-      logger.info('Starting Serializd sync...');
-      const scraper = new SerializdScraper(env.SERIALIZD_URL);
-      const series = await scraper.getSeries();
-      updateComponentStatus('serializd', 'ok', `Found ${series.length} series`);
-      logger.info(`Found ${series.length} series in Serializd watchlist`);
-      
+  if (config.serializd.length > 0) {
+    let hasError = false;
+    const allSeries = new Map<string, any>(); // TMDB ID -> Series
+
+    logger.info(`Processing ${config.serializd.length} Serializd lists...`);
+
+    for (const list of config.serializd) {
       try {
-        await syncSeries(series);
-        updateComponentStatus('sonarr', 'ok');
+        logger.info(`Fetching Serializd list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+        const scraper = new SerializdScraper(list.url);
+        const series = await scraper.getSeries();
+        
+        for (const item of series) {
+          if (!item.tmdbId) continue;
+
+          // Merge Logic
+          if (allSeries.has(item.tmdbId)) {
+            const existing = allSeries.get(item.tmdbId);
+            const existingTags = existing.tags || [];
+            const newTags = list.tags || [];
+            existing.tags = [...new Set([...existingTags, ...newTags])];
+          } else {
+            item.tags = [...(list.tags || [])];
+            allSeries.set(item.tmdbId, item);
+          }
+        }
+        logger.info(`Fetched ${series.length} series from list.`);
       } catch (e: any) {
-        updateComponentStatus('sonarr', 'error', e.message);
-        throw e;
+        logger.error(`Error fetching Serializd list ${list.url}:`, e);
+        hasError = true;
       }
-    } catch (e) {
-      logger.error('Error in Serializd sync:', e as any);
-      updateComponentStatus('serializd', 'error', (e as any).message);
+    }
+
+    const uniqueSeries = Array.from(allSeries.values());
+
+    if (uniqueSeries.length > 0) {
+        updateComponentStatus('serializd', hasError ? 'error' : 'ok', `Found ${uniqueSeries.length} unique series`);
+        logger.info(`Total unique series found across all lists: ${uniqueSeries.length}`);
+        
+        try {
+            await syncSeries(uniqueSeries);
+            updateComponentStatus('sonarr', 'ok');
+        } catch (e: any) {
+            updateComponentStatus('sonarr', 'error', e.message);
+            throw e; 
+        }
+    } else {
+        if (hasError) {
+             updateComponentStatus('serializd', 'error', 'Failed to fetch any series');
+        } else {
+             updateComponentStatus('serializd', 'ok', 'No series found in lists');
+        }
     }
   } else {
     updateComponentStatus('serializd', 'disabled');
