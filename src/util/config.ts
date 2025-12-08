@@ -19,6 +19,8 @@ const LetterboxdListSchema = z.object({
   url: z.string().url(),
   tags: z.array(z.string()).default([]),
   filters: FilterSchema.optional(),
+  activeFrom: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
+  activeUntil: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
   takeAmount: z.number().positive().optional(),
   takeStrategy: z.enum(['oldest', 'newest']).optional(),
 });
@@ -28,6 +30,8 @@ const SerializdListSchema = z.object({
   url: z.string().url(),
   tags: z.array(z.string()).default([]),
   filters: FilterSchema.optional(),
+  activeFrom: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
+  activeUntil: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
 });
 
 const ConfigSchema = z.object({

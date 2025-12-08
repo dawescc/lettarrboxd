@@ -4,6 +4,7 @@ require('dotenv').config();
 import env from './util/env';
 import config from './util/config';
 import logger from './util/logger';
+import { isListActive } from './util/schedule';
 import { fetchMoviesFromUrl } from './scraper';
 import { syncMovies } from './api/radarr';
 import { SerializdScraper } from './scraper/serializd';
@@ -46,6 +47,11 @@ async function run() {
     logger.info(`Processing ${config.letterboxd.length} Letterboxd lists...`);
 
     for (const list of config.letterboxd) {
+      if (!isListActive(list)) {
+        logger.info(`Skipping inactive list: ${list.id || list.url}`);
+        continue;
+      }
+
       try {
         logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
         const movies = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
@@ -128,6 +134,10 @@ async function run() {
     logger.info(`Processing ${config.serializd.length} Serializd lists...`);
 
     for (const list of config.serializd) {
+      if (!isListActive(list)) {
+        logger.info(`Skipping inactive Serializd list: ${list.id || list.url}`);
+        continue;
+      }
       try {
         logger.info(`Fetching Serializd list: ${list.url} (Tags: ${list.tags.join(', ')})`);
         const scraper = new SerializdScraper(list.url);

@@ -302,6 +302,19 @@ sonarr:
    tags: [ "global-tag" ]
 ```
 
+### Scheduled Lists (v1.6.1+)
+You can define optional `activeFrom` and `activeUntil` dates (MM-DD) for any list. The list will only be processed if the current date falls within the range.
+
+```yaml
+letterboxd:
+  - id: "christmas-classics"
+    url: "https://letterboxd.com/user/list/xmas/"
+    tags: ["christmas"]
+    activeFrom: "12-01"  # Only starts syncing on Dec 1st
+    activeUntil: "12-26" # Stops syncing (and removes movies if configured) on Dec 26th
+```
+*Note: If `REMOVE_MISSING_ITEMS` is true, movies from inactive lists will be removed from Radarr/Sonarr.*
+
 ### Docker Usage with Config URL
 
 Mount your config file to `/app/config.yaml` (or rely on the default check in root if you build your own image, but mounting is preferred).
