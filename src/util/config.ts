@@ -56,6 +56,12 @@ const ConfigSchema = z.object({
     tags: z.array(z.string()).default([]),
     seasonMonitoring: z.enum(['all', 'first', 'latest', 'future', 'none']).optional()
   }).optional(),
+
+  plex: z.object({
+    url: z.string().url(),
+    token: z.string(),
+    tags: z.array(z.string()).default(['lettarrboxd']),
+  }).optional(),
   
   dryRun: z.boolean().default(false),
 });

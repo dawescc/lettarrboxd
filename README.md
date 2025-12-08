@@ -315,7 +315,18 @@ letterboxd:
 ```
 *Note: If `REMOVE_MISSING_ITEMS` is true, movies from inactive lists will be removed from Radarr/Sonarr.*
 
-### Docker Usage with Config URL
+
+### Plex Integration (v1.6.1+)
+You can automatically apply labels to your Plex content matching your Letterboxd tags.
+
+```yaml
+plex:
+  url: "http://192.168.1.100:32400"
+  token: "your-plex-token"
+  tags: ["lettarrboxd"] # Labels applied to everything synced
+```
+*Note: This runs after the Radarr/Sonarr sync. It matches items by TMDB ID.*
+
 
 Mount your config file to `/app/config.yaml` (or rely on the default check in root if you build your own image, but mounting is preferred).
 

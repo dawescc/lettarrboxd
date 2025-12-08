@@ -9,6 +9,7 @@ import { fetchMoviesFromUrl } from './scraper';
 import { syncMovies } from './api/radarr';
 import { SerializdScraper } from './scraper/serializd';
 import { syncSeries } from './api/sonarr';
+import * as plex from './api/plex';
 
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
 
@@ -110,6 +111,9 @@ async function run() {
         try {
             await syncMovies(uniqueMovies);
             updateComponentStatus('radarr', 'ok');
+            
+            // Sync Plex
+            await syncPlexMetadata(uniqueMovies);
         } catch (e: any) {
             updateComponentStatus('radarr', 'error', e.message);
             throw e; 
@@ -173,6 +177,9 @@ async function run() {
         try {
             await syncSeries(uniqueSeries);
             updateComponentStatus('sonarr', 'ok');
+
+            // Sync Plex
+            await syncPlexMetadata(uniqueSeries);
         } catch (e: any) {
             updateComponentStatus('sonarr', 'error', e.message);
             throw e; 
@@ -190,6 +197,30 @@ async function run() {
   }
   
   logger.info('Sync complete.');
+}
+
+async function syncPlexMetadata(items: any[]) {
+  if (!config.plex) return;
+  
+  logger.info(`Syncing Plex metadata for ${items.length} items...`);
+  
+  for (const item of items) {
+      if (!item.tmdbId) continue;
+      
+      const itemTags = item.tags || [];
+      const globalPlexTags = config.plex.tags || [];
+      const allTags = [...new Set([...itemTags, ...globalPlexTags])];
+      
+      if (allTags.length === 0) continue;
+      
+      // We don't want to spam logs if not found, debug inside findItemByTmdbId handles it
+      const ratingKey = await plex.findItemByTmdbId(item.tmdbId);
+      if (ratingKey) {
+          for (const tag of allTags) {
+              await plex.addLabel(ratingKey, tag);
+          }
+      }
+  }
 }
 
 export async function main() {
