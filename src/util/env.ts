@@ -25,7 +25,10 @@ const envSchema = z.object({
   LETTERBOXD_TAKE_STRATEGY: z.enum(['oldest', 'newest']).optional(),
   DRY_RUN: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
   REMOVE_MISSING_ITEMS: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
-  DATA_DIR: z.string().default('./data')
+  DATA_DIR: z.string().default('./data'),
+  PLEX_URL: z.string().url().optional(),
+  PLEX_TOKEN: z.string().optional(),
+  PLEX_TAGS: z.string().optional(),
 }).refine(data => {
   // Validate Letterboxd/Radarr pairing
   if (data.LETTERBOXD_URL) {

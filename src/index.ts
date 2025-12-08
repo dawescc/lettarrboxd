@@ -12,6 +12,8 @@ import { syncSeries } from './api/sonarr';
 import * as plex from './api/plex';
 
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
+import { DEFAULT_TAG_NAME as RADARR_DEFAULT_TAG } from './api/radarr';
+import { DEFAULT_TAG_NAME as SONARR_DEFAULT_TAG } from './api/sonarr';
 
 function startScheduledMonitoring(): void {
   // Run immediately on startup
@@ -112,8 +114,9 @@ async function run() {
             await syncMovies(uniqueMovies);
             updateComponentStatus('radarr', 'ok');
             
-            // Sync Plex
-            await syncPlexMetadata(uniqueMovies);
+            // Sync Plex (include Radarr global tags + default tag)
+            const radarrTags = config.radarr?.tags || [];
+            await syncPlexMetadata(uniqueMovies, [...radarrTags, RADARR_DEFAULT_TAG], 'movie');
         } catch (e: any) {
             updateComponentStatus('radarr', 'error', e.message);
             throw e; 
@@ -178,8 +181,9 @@ async function run() {
             await syncSeries(uniqueSeries);
             updateComponentStatus('sonarr', 'ok');
 
-            // Sync Plex
-            await syncPlexMetadata(uniqueSeries);
+            // Sync Plex (include Sonarr global tags + default tag)
+            const sonarrTags = config.sonarr?.tags || [];
+            await syncPlexMetadata(uniqueSeries, [...sonarrTags, SONARR_DEFAULT_TAG], 'show');
         } catch (e: any) {
             updateComponentStatus('sonarr', 'error', e.message);
             throw e; 
@@ -199,7 +203,7 @@ async function run() {
   logger.info('Sync complete.');
 }
 
-async function syncPlexMetadata(items: any[]) {
+async function syncPlexMetadata(items: any[], extraTags: string[] = [], typeHint?: 'movie' | 'show') {
   if (!config.plex) return;
   
   logger.info(`Syncing Plex metadata for ${items.length} items...`);
@@ -209,16 +213,19 @@ async function syncPlexMetadata(items: any[]) {
       
       const itemTags = item.tags || [];
       const globalPlexTags = config.plex.tags || [];
-      const allTags = [...new Set([...itemTags, ...globalPlexTags])];
+      const allTags = [...new Set([...itemTags, ...globalPlexTags, ...extraTags])];
       
       if (allTags.length === 0) continue;
+
+      logger.info(`[DEBUG] Item ${item.tmdbId} Tags: Extra=${JSON.stringify(extraTags)}, Global=${JSON.stringify(globalPlexTags)}, All=${JSON.stringify(allTags)}`);
       
       // We don't want to spam logs if not found, debug inside findItemByTmdbId handles it
-      const ratingKey = await plex.findItemByTmdbId(item.tmdbId);
+      // Pass title, year (if available), and type hint for fallback search
+      const ratingKey = await plex.findItemByTmdbId(item.tmdbId, item.title || item.name, item.publishedYear || item.year, typeHint);
+      
       if (ratingKey) {
-          for (const tag of allTags) {
-              await plex.addLabel(ratingKey, tag);
-          }
+          // Atomic update instead of loop to prevent Last-Write-Wins race condition
+          await plex.addLabels(ratingKey, allTags, typeHint);
       }
   }
 }

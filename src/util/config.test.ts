@@ -105,4 +105,34 @@ letterboxd:
              require('./config');
         }).toThrow('Process.exit called with 1');
     });
+    it('should load Plex config from Env if present', () => {
+        mockExistsSync.mockReturnValue(false);
+        mockEnv = {
+            ...mockEnv,
+            PLEX_URL: 'http://plex-env',
+            PLEX_TOKEN: 'plex-token',
+            PLEX_TAGS: 'tag1,tag2'
+        } as any;
+
+        const config = require('./config').default;
+
+        expect(config.plex).toBeDefined();
+        expect(config.plex.url).toBe('http://plex-env');
+        expect(config.plex.token).toBe('plex-token');
+        expect(config.plex.tags).toEqual(['tag1', 'tag2']);
+    });
+    it('should disable default Plex tag if PLEX_TAGS is empty string', () => {
+        mockExistsSync.mockReturnValue(false);
+        mockEnv = {
+            ...mockEnv,
+            PLEX_URL: 'http://plex-env',
+            PLEX_TOKEN: 'token',
+            PLEX_TAGS: '' // Explicitly empty
+        } as any;
+
+        const config = require('./config').default;
+
+        expect(config.plex).toBeDefined();
+        expect(config.plex.tags).toEqual([]); // Should be empty, not ['lettarrboxd']
+    });
 });

@@ -14,6 +14,11 @@ services:
       - NODE_ENV=production
       - LOG_LEVEL=info
       - CHECK_INTERVAL_MINUTES=60
+      - TZ=America/New_York
+      # Plex Integration (Optional)
+      # - PLEX_URL=http://192.168.1.100:32400
+      # - PLEX_TOKEN=your-plex-token
+      # - PLEX_TAGS=lettarrboxd
       - RADARR_MINIMUM_AVAILABILITY=released
 
       # Optional root folder ID (if not specified, uses first available)

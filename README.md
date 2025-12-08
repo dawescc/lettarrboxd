@@ -244,6 +244,13 @@ At least one pair of source/destination variables must be configured.
 
 ### Optional Environment Variables
 
+### Plex (Optional - v1.6.2+)
+| Variable | Description |
+| :--- | :--- |
+| `PLEX_URL` | URL of your Plex server (e.g. `http://192.168.1.50:32400`) |
+| `PLEX_TOKEN` | Your Plex Authentication Token |
+| `PLEX_TAGS` | Comma-separated list of labels to apply (default: `lettarrboxd`) |
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHECK_INTERVAL_MINUTES` | `10` | How often to check for new items (minimum 10) |

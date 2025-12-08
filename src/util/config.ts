@@ -60,7 +60,7 @@ const ConfigSchema = z.object({
   plex: z.object({
     url: z.string().url(),
     token: z.string(),
-    tags: z.array(z.string()).default(['lettarrboxd']),
+    tags: z.array(z.string()).default([]),
   }).optional(),
   
   dryRun: z.boolean().default(false),
@@ -139,6 +139,42 @@ function loadConfig(): Config {
   // Set dryRun from ENV if not in config
   if (env.DRY_RUN) {
     config.dryRun = true;
+  }
+
+  // Fallback: Use ENV for Plex if not in config
+  if (!config.plex && env.PLEX_URL && env.PLEX_TOKEN) {
+      config.plex = {
+          url: env.PLEX_URL,
+          token: env.PLEX_TOKEN,
+          // If PLEX_TAGS is undefined, use default.
+          // If PLEX_TAGS is string (even empty), parse it.
+          tags: env.PLEX_TAGS ? env.PLEX_TAGS.split(',').map(t => t.trim()).filter(t => t.length > 0) : []
+      };
+      logger.info('Using Plex configuration from Environment Variables');
+  }
+
+  // --- Inject Global Tags from ENV ---
+
+  // Radarr Tags
+  if (env.RADARR_TAGS) {
+      if (!config.radarr) {
+          config.radarr = { tags: [] };
+      }
+      const envTags = env.RADARR_TAGS.split(',').map(t => t.trim()).filter(t => t.length > 0);
+      // Merge with existing tags, ensuring uniqueness
+      // Use optional chaining fallback just to be safe for TS
+      const currentTags = config.radarr.tags || []; 
+      config.radarr.tags = [...new Set([...currentTags, ...envTags])];
+  }
+
+  // Sonarr Tags
+  if (env.SONARR_TAGS) {
+      if (!config.sonarr) {
+          config.sonarr = { tags: [] };
+      }
+      const envTags = env.SONARR_TAGS.split(',').map(t => t.trim()).filter(t => t.length > 0);
+      const currentTags = config.sonarr.tags || [];
+      config.sonarr.tags = [...new Set([...currentTags, ...envTags])];
   }
 
   return config;

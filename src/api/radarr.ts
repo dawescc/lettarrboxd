@@ -18,7 +18,7 @@ interface RadarrMovie {
     }
 }
 
-const DEFAULT_TAG_NAME = 'letterboxd';
+export const DEFAULT_TAG_NAME = 'letterboxd';
 
 const axios = Axios.create({
     baseURL: env.RADARR_API_URL,

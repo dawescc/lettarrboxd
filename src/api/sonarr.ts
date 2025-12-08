@@ -21,7 +21,7 @@ interface SonarrSeries {
     }
 }
 
-const DEFAULT_TAG_NAME = 'serializd';
+export const DEFAULT_TAG_NAME = 'serializd';
 
 const axios = Axios.create({
     baseURL: env.SONARR_API_URL,
