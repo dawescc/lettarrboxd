@@ -64,12 +64,36 @@ export class ListScraper implements Scraper {
         const $ = cheerio.load(html);
         const links: string[] = [];
         
+        logger.debug(`Parsing HTML length: ${html.length}`);
+
+        // Strategy 1: React Component (Modern Lists)
         $('.react-component[data-target-link]').each((_, element) => {
             const filmLink = $(element).attr('data-target-link');
-            if (filmLink) {
-                links.push(filmLink);
-            }
+            if (filmLink) links.push(filmLink);
         });
+
+        // Strategy 2: Poster Container (Classic/Fallback)
+        if (links.length === 0) {
+            logger.debug('Strategy 1 failed. Trying Strategy 2 (Poster Items)...');
+            $('.poster-container div[data-target-link]').each((_, element) => {
+                const filmLink = $(element).attr('data-target-link');
+                if (filmLink) links.push(filmLink);
+            });
+        }
+        
+        // Strategy 3: Direct Poster Item (Found in manual Curl)
+        if (links.length === 0) {
+            logger.debug('Strategy 2 failed. Trying Strategy 3 (Direct Poster Item)...');
+            $('.posteritem div[data-target-link]').each((_, element) => {
+                const filmLink = $(element).attr('data-target-link');
+                if (filmLink) links.push(filmLink);
+            });
+        }
+
+        if (links.length === 0) {
+            logger.warn(`Scraper found 0 links.`);
+        }
+
         logger.debug(`Found ${links.length} links.`);
         return links;
     }
