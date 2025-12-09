@@ -1,4 +1,4 @@
-import { startScheduledMonitoring, main } from './index';
+import { startScheduledMonitoring, main, run } from './index';
 import * as scraperModule from './scraper';
 import * as radarrModule from './api/radarr';
 import * as serializdScraper from './scraper/serializd';
@@ -79,7 +79,7 @@ describe('main application logic', () => {
 
       (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
 
-      await startScheduledMonitoring(); // Triggers run()
+      await run(); // Triggers run()
 
       await Promise.resolve(); // wait for run promise
 
@@ -120,8 +120,7 @@ describe('main application logic', () => {
         { tmdbId: '3', name: 'Unknown Rating', rating: null }
       ]);
 
-      await startScheduledMonitoring();
-      await Promise.resolve();
+      await run();
 
       const calls = (radarrModule.syncMovies as jest.Mock).mock.calls[0];
       const movies = calls[0];
@@ -147,8 +146,7 @@ describe('main application logic', () => {
         { tmdbId: '4', name: 'Unknown Year', publishedYear: null }
       ]);
 
-      await startScheduledMonitoring();
-      await Promise.resolve();
+      await run();
 
       const calls = (radarrModule.syncMovies as jest.Mock).mock.calls[0];
       const movies = calls[0];

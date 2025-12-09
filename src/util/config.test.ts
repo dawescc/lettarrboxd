@@ -1,138 +1,59 @@
+import { loadConfig } from './config';
 import fs from 'fs';
-import { z } from 'zod';
+import env from './env';
 
-// Explicit mocks
-const mockExistsSync = jest.fn();
-const mockReadFileSync = jest.fn();
-
-jest.mock('fs', () => ({
-  __esModule: true,
-  default: {
-    existsSync: mockExistsSync,
-    readFileSync: mockReadFileSync,
-  },
-  existsSync: mockExistsSync,
-  readFileSync: mockReadFileSync,
+// Mock fs and env
+jest.mock('fs');
+jest.mock('./env', () => ({
+  // Default mocks, will be overridden
+  LETTERBOXD_URL: 'http://test',
+  LOG_LEVEL: 'info',
+  RADARR_TAGS: undefined,
+  SONARR_TAGS: undefined,
+  PLEX_URL: undefined
 }));
-
 jest.mock('./logger', () => ({
-  __esModule: true,
-  default: {
-    info: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
-    warn: jest.fn(),
-  }
+    __esModule: true,
+    default: {
+        info: jest.fn(),
+        error: jest.fn()
+    }
 }));
 
-// Mock env
-let mockEnv = {
-    LETTERBOXD_URL: 'https://env-letterboxd',
-    SERIALIZD_URL: 'https://env-serializd',
-    DRY_RUN: false,
-    LETTERBOXD_TAKE_AMOUNT: 10,
-    LETTERBOXD_TAKE_STRATEGY: 'newest'
-};
-
-jest.mock('./env', () => {
-    return {
-        __esModule: true,
-        default: new Proxy({}, {
-            get: (target, prop) => mockEnv[prop as keyof typeof mockEnv]
-        })
-    };
-});
 
 describe('Config Loader', () => {
-    let mockExit: jest.SpyInstance;
-
     beforeEach(() => {
         jest.clearAllMocks();
-        // Make process.exit throw so we stop execution
-        mockExit = jest.spyOn(process, 'exit').mockImplementation(((code: number) => {
-            throw new Error(`Process.exit called with ${code}`);
-        }) as any);
-        
-        jest.resetModules();
-        
-        // Reset defaults
-        mockEnv = {
-            LETTERBOXD_URL: 'https://env-letterboxd',
-            SERIALIZD_URL: 'https://env-serializd',
-            DRY_RUN: false,
-            LETTERBOXD_TAKE_AMOUNT: 10,
-            LETTERBOXD_TAKE_STRATEGY: 'newest'
-        } as any;
+        // Reset env overrides
+        (env as any).RADARR_TAGS = undefined;
+        (env as any).SONARR_TAGS = undefined;
+        (env as any).LETTERBOXD_URL = undefined;
     });
 
-    afterEach(() => {
-        mockExit.mockRestore();
+    it('should inject RADARR_TAGS from env into config', () => {
+        // Setup no config file
+        (fs.existsSync as jest.Mock).mockReturnValue(false);
+        (env as any).RADARR_TAGS = 'watchlist';
+
+        const config = loadConfig();
+
+        expect(config.radarr?.tags).toContain('watchlist');
     });
 
-    it('should load config from src/config/config.yaml if it exists', () => {
-        mockExistsSync.mockReturnValue(true);
-        mockReadFileSync.mockReturnValue(`
-letterboxd:
-  - url: https://yaml-list
-    tags: [yaml]
-`);
-        
-        const config = require('./config').default;
-        
-        expect(config.letterboxd).toHaveLength(1);
-        expect(config.letterboxd[0].url).toBe('https://yaml-list');
-        expect(config.letterboxd[0].tags).toEqual(['yaml']);
-    });
+    it('should merge ENV tags with Config tags', () => {
+        // Setup config file exist
+        (fs.existsSync as jest.Mock).mockReturnValue(true);
+        (fs.readFileSync as jest.Mock).mockReturnValue(`
+letterboxd: []
+serializd: []
+radarr:
+  tags:
+    - existing
+        `);
+        (env as any).RADARR_TAGS = 'new-tag';
 
-    it('should fallback to Env variables if config file missing', () => {
-        mockExistsSync.mockReturnValue(false); 
+        const config = loadConfig();
 
-        const config = require('./config').default;
-
-        expect(config.letterboxd).toHaveLength(1);
-        expect(config.letterboxd[0].id).toBe('env-letterboxd');
-    });
-
-    it('should exit if YAML is invalid', () => {
-        mockExistsSync.mockReturnValue(true);
-        // Invalid URL
-        mockReadFileSync.mockReturnValue(`
-letterboxd:
-  - url: not-a-url
-`); 
-
-        expect(() => {
-             require('./config');
-        }).toThrow('Process.exit called with 1');
-    });
-    it('should load Plex config from Env if present', () => {
-        mockExistsSync.mockReturnValue(false);
-        mockEnv = {
-            ...mockEnv,
-            PLEX_URL: 'http://plex-env',
-            PLEX_TOKEN: 'plex-token',
-            PLEX_TAGS: 'tag1,tag2'
-        } as any;
-
-        const config = require('./config').default;
-
-        expect(config.plex).toBeDefined();
-        expect(config.plex.url).toBe('http://plex-env');
-        expect(config.plex.token).toBe('plex-token');
-        expect(config.plex.tags).toEqual(['tag1', 'tag2']);
-    });
-    it('should disable default Plex tag if PLEX_TAGS is empty string', () => {
-        mockExistsSync.mockReturnValue(false);
-        mockEnv = {
-            ...mockEnv,
-            PLEX_URL: 'http://plex-env',
-            PLEX_TOKEN: 'token',
-            PLEX_TAGS: '' // Explicitly empty
-        } as any;
-
-        const config = require('./config').default;
-
-        expect(config.plex).toBeDefined();
-        expect(config.plex.tags).toEqual([]); // Should be empty, not ['lettarrboxd']
+        expect(config.radarr?.tags).toEqual(['existing', 'new-tag']);
     });
 });

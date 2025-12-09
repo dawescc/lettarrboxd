@@ -1,9 +1,31 @@
-import Axios from 'axios';
+import Axios, { AxiosInstance } from 'axios';
 import config from '../util/config';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
 
-const axios = Axios.create();
+let plexClient: AxiosInstance | null = null;
+
+function getPlexClient(): AxiosInstance {
+    if (!plexClient) {
+        plexClient = Axios.create();
+    }
+    return plexClient;
+}
+
+// --- Types ---
+interface PlexMetadata {
+    ratingKey: string;
+    title: string;
+    type: string;
+    Guid?: { id: string }[];
+    Label?: { tag: string }[];
+}
+
+interface PlexMediaContainer {
+    MediaContainer: {
+        Metadata?: PlexMetadata[];
+    };
+}
 
 /**
  * Searches Plex for an item by its TMDB ID.
@@ -12,8 +34,6 @@ const axios = Axios.create();
  * @param tmdbId The TMDB ID to search for
  * @returns The ratingKey (internal ID) of the item, or null if not found
  */
-const MAX_TITLE_SEARCH_RESULTS = 10;
-
 export async function findItemByTmdbId(tmdbId: string, title?: string, year?: number, type?: 'movie' | 'show'): Promise<string | null> {
     if (!config.plex) return null;
 
@@ -63,14 +83,13 @@ export async function findItemByTmdbId(tmdbId: string, title?: string, year?: nu
 
 async function searchByGuid(baseUrl: string, token: string, guid: string): Promise<string | null> {
     try {
-        const response = await axios.get(`${baseUrl}/library/all`, {
+        const response = await getPlexClient().get<PlexMediaContainer>(`${baseUrl}/library/all`, {
             headers: { 'X-Plex-Token': token, 'Accept': 'application/json' },
             params: { guid }
         });
 
-        if (response.data?.MediaContainer?.Metadata?.length > 0) {
+        if (response.data?.MediaContainer?.Metadata?.length && response.data.MediaContainer.Metadata.length > 0) {
             const item = response.data.MediaContainer.Metadata[0];
-            // logger.debug(`Found Plex item for GUID ${guid}: ${item.title} (Key: ${item.ratingKey})`);
             return item.ratingKey;
         }
     } catch (e) {
@@ -89,8 +108,7 @@ async function searchByTitleAndId(
 ): Promise<string | null> {
     try {
         // Prepare params
-        // type: 1 = Movie, 2 = Show (if we know it)
-        const params: any = {
+        const params: Record<string, any> = {
             title,
             includeGuids: 1
         };
@@ -99,10 +117,7 @@ async function searchByTitleAndId(
         if (type === 'show') params.type = 2;
         if (year) params.year = year;
         
-        // Don't filter by year strictly in the query as it might fuzzy match, 
-        // better to filter in memory if needed or trust the ID check.
-
-        const response = await axios.get(`${baseUrl}/library/all`, {
+        const response = await getPlexClient().get<PlexMediaContainer>(`${baseUrl}/library/all`, {
             headers: { 'X-Plex-Token': token, 'Accept': 'application/json' },
             params
         });
@@ -115,9 +130,8 @@ async function searchByTitleAndId(
             if (type === 'show' && item.type !== 'show') continue;
 
             // 2. Check Guids array
-            // Format: id="tmdb://12345" or "com.plexapp.agents.themoviedb://12345"
             const guids = item.Guid || [];
-            const hasMatch = guids.some((g: any) => 
+            const hasMatch = guids.some((g: { id: string }) => 
                 g.id === `tmdb://${tmdbId}` || 
                 g.id.includes(`//${tmdbId}?`) || 
                 g.id.includes(`//${tmdbId}`)
@@ -135,32 +149,33 @@ async function searchByTitleAndId(
 }
 
 /**
- * Adds a label to a Plex item.
- * Preserves existing labels.
+ * Adds multiple labels to an item in a single atomic update.
+ * Merges with existing labels to prevent overwriting.
  * 
  * @param ratingKey The internal Plex ID of the item
- * @param label The label to add
+ * @param labels Array of labels to add
+ * @param typeHint 'movie' or 'show' (optional, but recommended for API compliance)
  */
-    /**
-     * Adds multiple labels to an item in a single atomic update.
-     * Merges with existing labels to prevent overwriting.
-     */
-    export async function addLabels(ratingKey: string, labels: string[], typeHint?: 'movie' | 'show') {
-         // Keep UI responsive
-        process.stdout.write(`\r      Syncing Plex metadata...`);
-        
-        // Remove 'config' property access since this is a standalone function, use global config
-        if (!config.plex) return;
-        const { url, token } = config.plex;
+export async function addLabels(ratingKey: string, labels: string[], typeHint?: 'movie' | 'show') {
+    // Remove 'config' property access since this is a standalone function, use global config
+    if (!config.plex) return;
+    const { url, token } = config.plex;
 
-        try {
+    process.stdout.write(`\r      Syncing Plex metadata...`);
+
+    try {
+        await retryOperation(async () => {
             // 1. Get existing metadata/labels
-            const details = await axios.get(`${url}/library/metadata/${ratingKey}`, {
+            const details = await getPlexClient().get<PlexMediaContainer>(`${url}/library/metadata/${ratingKey}`, {
                 headers: { 'X-Plex-Token': token, 'Accept': 'application/json' }
             });
 
-            const metadata = details.data.MediaContainer.Metadata[0];
-            const existingLabels = (metadata.Label || []).map((l: any) => l.tag);
+            const metadata = details.data.MediaContainer.Metadata?.[0];
+            if (!metadata) {
+                throw new Error(`Item ${ratingKey} not found in Plex`);
+            }
+
+            const existingLabels = (metadata.Label || []).map((l: { tag: string }) => l.tag);
             
             logger.info(`[DEBUG] Item ${ratingKey} Existing Labels: ${JSON.stringify(existingLabels)}`);
 
@@ -189,15 +204,58 @@ async function searchByTitleAndId(
             
             logger.info(`[DEBUG] PUT URL (Batch): ${fullUrl}`);
 
-            const response = await axios.put(fullUrl, null, {
+            const response = await getPlexClient().put(fullUrl, null, {
                 headers: { 'X-Plex-Token': token, 'Accept': 'application/json' }
             });
             
             logger.info(`[DEBUG] Plex Response: ${response.status} ${JSON.stringify(response.data)}`);
 
             logger.info(`Added labels [${missingLabels.join(', ')}] to Plex item ${metadata.title}`);
+        }, 'add plex labels');
 
-        } catch (error: any) {
-            logger.error(`Error adding labels to Plex item ${ratingKey}:`, error.message);
-        }
+    } catch (error: any) {
+        logger.error(`Error adding labels to Plex item ${ratingKey}:`, error.message);
     }
+}
+
+import Bluebird from 'bluebird';
+import { ScrapedMedia } from '../scraper';
+
+/**
+ * Syncs tags for a batch of items in parallel.
+ * 
+ * @param items List of scraped items (movies or series)
+ * @param globalTags Tags to apply to every item (e.g. ['letterboxd', 'radarr'])
+ * @param typeHint 'movie' or 'show' (optional, improves lookup speed)
+ */
+export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] = [], typeHint?: 'movie' | 'show') {
+    if (!config.plex) return;
+
+    logger.info(`Syncing Plex metadata for ${items.length} items (Concurrency: 5)...`);
+
+    await Bluebird.map(items, async (item) => {
+        if (!item.tmdbId) return;
+
+        const itemTags = item.tags || [];
+        // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
+        // Note: The caller should pass 'globalTags' which might include the 'radarr'/'sonarr' tag
+        const allTags = [...new Set([...itemTags, ...globalTags])];
+
+        if (allTags.length === 0) return;
+
+        try {
+            // Pass title, year (if available), and type hint for fallback search
+            // We need to cast to any to safely access optional properties that might exist on LetterboxdMovie
+            const year = (item as any).publishedYear || (item as any).year;
+            
+            const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint);
+
+            if (ratingKey) {
+                // Atomic update
+                await addLabels(ratingKey, allTags, typeHint);
+            }
+        } catch (e: any) {
+            logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
+        }
+    }, { concurrency: 5 });
+}

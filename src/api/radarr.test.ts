@@ -45,8 +45,8 @@ import {
   getQualityProfileId,
   getRootFolder,
   getRootFolderById,
-  getOrCreateTag,
-  getAllRequiredTagIds,
+  ensureTagsAreAvailable,
+  getAllTags,
   addMovie,
   syncMovies,
   getAllMovies,
@@ -175,8 +175,8 @@ describe('radarr API', () => {
     });
   });
 
-  describe('getOrCreateTag', () => {
-    it('should return existing tag ID', async () => {
+  describe('ensureTagsAreAvailable', () => {
+    it('should return map of existing tags', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: [
           { id: 1, label: 'letterboxd' },
@@ -184,14 +184,16 @@ describe('radarr API', () => {
         ],
       });
 
-      const result = await getOrCreateTag('letterboxd');
+      const startTags = ['letterboxd', 'other'];
+      const result = await ensureTagsAreAvailable(startTags);
 
-      expect(result).toBe(1);
+      expect(result.get('letterboxd')).toBe(1);
+      expect(result.get('other')).toBe(2);
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/tag');
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
-    it('should create new tag when it does not exist', async () => {
+    it('should create missing tags', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: [{ id: 1, label: 'existing' }],
       });
@@ -200,57 +202,20 @@ describe('radarr API', () => {
         data: { id: 2, label: 'newtag' },
       });
 
-      const result = await getOrCreateTag('newtag');
+      const tags = ['existing', 'newtag'];
+      const result = await ensureTagsAreAvailable(tags);
 
-      expect(result).toBe(2);
+      expect(result.get('existing')).toBe(1);
+      expect(result.get('newtag')).toBe(2);
       expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/tag', {
         label: 'newtag',
       });
     });
 
-    it('should return null on error', async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network error'));
-
-      const result = await getOrCreateTag('testtag');
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('getAllRequiredTagIds', () => {
-    it('should return tag IDs for all configured tags', async () => {
-      mockAxiosInstance.get.mockResolvedValue({
-        data: [],
-      });
-
-      mockAxiosInstance.post
-        .mockResolvedValueOnce({ data: { id: 1, label: 'letterboxd' } })
-        .mockResolvedValueOnce({ data: { id: 2, label: 'tag1' } })
-        .mockResolvedValueOnce({ data: { id: 3, label: 'tag2' } });
-
-      const result = await getAllRequiredTagIds();
-
-      expect(result).toHaveLength(3);
-      expect(result).toContain(1);
-      expect(result).toContain(2);
-      expect(result).toContain(3);
-    });
-
-    it('should filter out null tag IDs', async () => {
-      mockAxiosInstance.get.mockResolvedValue({
-        data: [],
-      });
-
-      mockAxiosInstance.post
-        .mockResolvedValueOnce({ data: { id: 1, label: 'letterboxd' } })
-        .mockRejectedValueOnce(new Error('Failed to create tag'))
-        .mockResolvedValueOnce({ data: { id: 3, label: 'tag2' } });
-
-      const result = await getAllRequiredTagIds();
-
-      expect(result).toHaveLength(2);
-      expect(result).toContain(1);
-      expect(result).toContain(3);
+    it('should handle errors gracefully', async () => {
+        mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network Error'));
+        const result = await ensureTagsAreAvailable(['foo']);
+        expect(result.size).toBe(0);
     });
   });
 

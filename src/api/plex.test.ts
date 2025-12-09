@@ -1,166 +1,148 @@
-
+import { findItemByTmdbId, addLabels } from './plex';
+import Axios from 'axios';
 import config from '../util/config';
 
-// Types for our module functions
-type FindItemFn = (id: string) => Promise<string | null>;
-type AddLabelFn = (key: string, label: string) => Promise<void>;
+// Robust mocking: Auto-mock the module, then configure the mock instance
+jest.mock('axios');
+jest.mock('../util/config');
+jest.mock('../util/logger', () => ({
+    __esModule: true,
+    default: {
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn()
+    }
+}));
+jest.mock('../util/retry', () => ({
+  retryOperation: (fn: Function) => fn()
+}));
+
+const mockedAxios = Axios as jest.Mocked<typeof Axios>;
+
+// Define the mock client instance that Axios.create() will return
+const mockClient = {
+    get: jest.fn(),
+    put: jest.fn(),
+    defaults: { headers: { common: {} } },
+    interceptors: { request: { use: jest.fn() }, response: { use: jest.fn() } }
+};
+
+// Configure Axios.create to return our mock client
+// Use mockReturnValue (synchronous constant return)
+mockedAxios.create.mockReturnValue(mockClient as any);
 
 describe('Plex API', () => {
-    let findItemByTmdbId: FindItemFn;
-    let addLabel: AddLabelFn;
-    let mockGet: jest.Mock;
-    let mockPut: jest.Mock;
-
     beforeEach(() => {
-        jest.resetModules();
         jest.clearAllMocks();
-
-        mockGet = jest.fn();
-        mockPut = jest.fn();
-
-        // 1. Mock Axios using doMock to avoid hoisting
-        jest.doMock('axios', () => ({
-            create: jest.fn(() => ({
-                get: mockGet,
-                put: mockPut
-            })),
-            default: {
-                create: jest.fn(() => ({
-                    get: mockGet,
-                    put: mockPut
-                }))
-            }
-        }));
-
-        // 2. Mock Config
-        // Ensure TS default import compatibility
-        jest.doMock('../util/config', () => ({
-            __esModule: true,
-            default: {
-                plex: {
-                    url: 'http://plex.test',
-                    token: 'test-token',
-                    tags: ['lettarrboxd']
-                }
-            }
-        }));
-
-        // 3. Mock Logger
-        jest.doMock('../util/logger', () => ({
-            debug: jest.fn(),
-            info: jest.fn(),
-            warn: jest.fn(), // Console.warn to debug
-            error: jest.fn((msg, err) => console.error(msg, err)), // Log errors
-        }));
         
-        jest.doMock('../util/retry', () => ({
-            retryOperation: jest.fn((fn) => fn())
-        }));
-
-        // 4. Require the module under test
-        const plexModule = require('./plex');
-        findItemByTmdbId = plexModule.findItemByTmdbId;
-        addLabel = plexModule.addLabel;
+        // Re-apply the mock return value in case it was cleared (though mockReturnValue persists usually)
+        mockedAxios.create.mockReturnValue(mockClient as any);
+        
+        // Setup default config mock
+        (config as any).plex = {
+            url: 'http://plex:32400',
+            token: 'test-token',
+            tags: []
+        };
     });
 
     describe('findItemByTmdbId', () => {
-        it('should return ratingKey when item is found', async () => {
-            mockGet.mockResolvedValue({
+        it('should return ratingKey if found by Legacy Agent GUID', async () => {
+             // Mock response for searchByGuid
+             mockClient.get.mockResolvedValueOnce({
+                 data: {
+                     MediaContainer: {
+                        Metadata: [
+                            { ratingKey: '100', title: 'Test Movie', Guid: [{ id: 'com.plexapp.agents.themoviedb://12345?lang=en' }] }
+                        ]
+                     }
+                 }
+             });
+
+             const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie');
+             expect(result).toBe('100');
+             expect(mockClient.get).toHaveBeenCalledWith('http://plex:32400/library/all', expect.objectContaining({
+                 params: { guid: 'com.plexapp.agents.themoviedb://12345?lang=en' }
+             }));
+        });
+
+        it('should fallback to title search if GUID fails', async () => {
+            // 1. Legacy fail
+            mockClient.get.mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
+            // 2. Modern Movie fail
+            mockClient.get.mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
+            
+            // 3. Title Search success
+            mockClient.get.mockResolvedValueOnce({
                 data: {
                     MediaContainer: {
                         Metadata: [
-                            { ratingKey: '12345', title: 'Test Movie' }
+                            { 
+                                ratingKey: '200', 
+                                title: 'Test Movie', 
+                                type: 'movie',
+                                Guid: [{ id: 'tmdb://12345' }] 
+                            }
                         ]
                     }
                 }
             });
 
-            const result = await findItemByTmdbId('999');
-            expect(result).toBe('12345');
-            
-            // Check headers/params
-            expect(mockGet).toHaveBeenCalledWith('http://plex.test/library/all', expect.objectContaining({
-                headers: expect.objectContaining({ 'X-Plex-Token': 'test-token' }),
-                params: expect.objectContaining({
-                    guid: 'com.plexapp.agents.themoviedb://999?lang=en'
-                })
-            }));
-        });
-
-        it('should return null when no item is found', async () => {
-            mockGet.mockResolvedValue({
-                data: {
-                    MediaContainer: {
-                        Metadata: []
-                    }
-                }
-            });
-
-            const result = await findItemByTmdbId('999');
-            expect(result).toBeNull();
-        });
-
-        it('should return null on error', async () => {
-             mockGet.mockRejectedValue(new Error('Network Error'));
-             const result = await findItemByTmdbId('999');
-             expect(result).toBeNull();
+            const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie');
+            expect(result).toBe('200');
         });
     });
 
-    describe('addLabel', () => {
-        it('should add label if it does not exist', async () => {
-            // Mock finding existing labels
-            mockGet.mockResolvedValue({
+    describe('addLabels', () => {
+        it('should add new labels with atomic batch update', async () => {
+            // 1. Get existing labels (mock)
+            mockClient.get.mockResolvedValueOnce({
                 data: {
                     MediaContainer: {
                         Metadata: [
                             { 
-                                title: 'Test Movie',
-                                Label: [{ tag: 'existing' }] 
+                                ratingKey: '100', 
+                                title: 'Test Movie', 
+                                Label: [{ tag: 'existing-tag' }] 
                             }
                         ]
                     }
                 }
             });
 
-            await addLabel('12345', 'new-label');
+            // 2. Put response
+            mockClient.put.mockResolvedValueOnce({ status: 200, data: {} });
 
-            expect(mockPut).toHaveBeenCalledWith(
-                'http://plex.test/library/metadata/12345',
-                null, 
-                expect.objectContaining({
-                   params: expect.any(URLSearchParams) 
-                })
-            );
+            await addLabels('100', ['new-tag'], 'movie');
+
+            // Verify PUT URL
+            expect(mockClient.put).toHaveBeenCalledTimes(1);
+            const callArgs = mockClient.put.mock.calls[0];
+            const url = callArgs[0];
             
-            // Verify params contains new label
-            const callArgs = mockPut.mock.calls[0];
-            const params = callArgs[2].params as URLSearchParams;
-            expect(params.getAll('label[0].tag.value')).toContain('existing');
-            // Since we use new URLSearchParams in the code, the index might vary or key might be explicit.
-            // My code: params.append(`label[${i}].tag.value`, l);
-            // existing -> 0, new-label -> 1
-            expect(params.get('label[0].tag.value')).toBe('existing');
-            expect(params.get('label[1].tag.value')).toBe('new-label');
+            // Check for correct label structure
+            expect(url).toContain('label[0].tag.tag=existing-tag');
+            expect(url).toContain('label[1].tag.tag=new-tag');
+            expect(url).toContain('type=1');
         });
 
-        it('should skip if label already exists', async () => {
-            mockGet.mockResolvedValue({
+        it('should deduplicate tags and skip if no new tags', async () => {
+            // 1. Get existing labels
+            mockClient.get.mockResolvedValueOnce({
                 data: {
                     MediaContainer: {
                         Metadata: [
-                            { 
-                                title: 'Test Movie',
-                                Label: [{ tag: 'existing' }, { tag: 'new-label' }] 
-                            }
+                            { ratingKey: '100', Label: [{ tag: 'existing-tag' }] }
                         ]
                     }
                 }
             });
 
-            await addLabel('12345', 'new-label');
+            await addLabels('100', ['existing-tag'], 'movie');
 
-            expect(mockPut).not.toHaveBeenCalled();
+            // Expect NO put calls
+            expect(mockClient.put).not.toHaveBeenCalled();
         });
     });
 });

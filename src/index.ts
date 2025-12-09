@@ -1,19 +1,34 @@
 require('dotenv').config();
 
-
+import Bluebird from 'bluebird';
 import env from './util/env';
 import config from './util/config';
 import logger from './util/logger';
 import { isListActive } from './util/schedule';
-import { fetchMoviesFromUrl } from './scraper';
+import { fetchMoviesFromUrl, ScrapedMedia, LetterboxdMovie, ScrapedSeries } from './scraper';
 import { syncMovies } from './api/radarr';
 import { SerializdScraper } from './scraper/serializd';
 import { syncSeries } from './api/sonarr';
 import * as plex from './api/plex';
-
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
 import { DEFAULT_TAG_NAME as RADARR_DEFAULT_TAG } from './api/radarr';
 import { DEFAULT_TAG_NAME as SONARR_DEFAULT_TAG } from './api/sonarr';
+
+// Types for our generic processor
+interface BaseListConfig {
+    id?: string;
+    url: string;
+    tags: string[];
+    activeFrom?: string;
+    activeUntil?: string;
+    filters?: {
+        minRating?: number;
+        minYear?: number;
+        maxYear?: number;
+    };
+    takeAmount?: number;
+    takeStrategy?: 'oldest' | 'newest';
+}
 
 function startScheduledMonitoring(): void {
   // Run immediately on startup
@@ -40,194 +55,134 @@ function scheduleNextRun() {
   logger.info(`Next run scheduled for: ${nextRun.toLocaleString()}`);
 }
 
-async function run() {
-  // Letterboxd -> Radarr
-  // Letterboxd -> Radarr
-  if (config.letterboxd.length > 0) {
-    let hasError = false;
-    const allMovies = new Map<string, any>(); // TMDB ID -> Movie
-
-    logger.info(`Processing ${config.letterboxd.length} Letterboxd lists...`);
-
-    for (const list of config.letterboxd) {
-      if (!isListActive(list)) {
-        logger.info(`Skipping inactive list: ${list.id || list.url}`);
-        continue;
-      }
-
-      try {
-        logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-        const movies = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
-        
-        for (const movie of movies) {
-          // Client-side filtering
-          if (list.filters) {
-              const { minRating, minYear, maxYear } = list.filters;
-              
-              if (minRating !== undefined) {
-                  // If movie has no rating, we exclude it if a minRating is requested (strict)
-                  if (movie.rating === undefined || movie.rating === null || movie.rating < minRating) {
-                      continue;
-                  }
-              }
-
-              if (minYear !== undefined) {
-                  if (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear < minYear) {
-                      continue;
-                  }
-              }
-
-              if (maxYear !== undefined) {
-                  if (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear > maxYear) {
-                      continue;
-                  }
-              }
-          }
-
-          if (!movie.tmdbId) continue;
-
-          // Merge Logic
-          if (allMovies.has(movie.tmdbId)) {
-            const existing = allMovies.get(movie.tmdbId);
-            const existingTags = existing.tags || [];
-            const newTags = list.tags || [];
-            existing.tags = [...new Set([...existingTags, ...newTags])];
-          } else {
-            movie.tags = [...(list.tags || [])];
-            allMovies.set(movie.tmdbId, movie);
-          }
-        }
-        logger.info(`Fetched ${movies.length} movies from list.`);
-      } catch (e: any) {
-        logger.error(`Error fetching list ${list.url}:`, e);
-        hasError = true;
-      }
+/**
+ * Generic function to process a collection of lists (Movies or Series)
+ */
+async function processLists<T extends ScrapedMedia>(
+    lists: BaseListConfig[],
+    componentName: string, // 'letterboxd' or 'serializd'
+    fetchItemsFn: (list: BaseListConfig) => Promise<T[]>,
+    syncItemsFn: (items: T[]) => Promise<void>,
+    plexType: 'movie' | 'show',
+    plexGlobalTags: string[]
+) {
+    if (lists.length === 0) {
+        updateComponentStatus(componentName, 'disabled');
+        return;
     }
 
-    const uniqueMovies = Array.from(allMovies.values());
+    let hasError = false;
+    const allItems = new Map<string, T>(); // TMDB ID -> Item
 
-    if (uniqueMovies.length > 0) {
-        updateComponentStatus('letterboxd', hasError ? 'error' : 'ok', `Found ${uniqueMovies.length} unique movies`);
-        logger.info(`Total unique movies found across all lists: ${uniqueMovies.length}`);
+    logger.info(`Processing ${lists.length} ${componentName} lists...`);
+
+    // Parallel processing with concurrency limit
+    await Bluebird.map(lists, async (list) => {
+        if (!isListActive(list)) {
+            logger.info(`Skipping inactive list: ${list.id || list.url}`);
+            return;
+        }
+
+        try {
+            logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            const items = await fetchItemsFn(list);
+
+            for (const item of items) {
+                if (!item.tmdbId) continue;
+
+                // Merge Logic (Thread-safe within the Map context since JS is single threaded event loop)
+                if (allItems.has(item.tmdbId)) {
+                    const existing = allItems.get(item.tmdbId)!;
+                    const existingTags = existing.tags || [];
+                    const newTags = list.tags || [];
+                    existing.tags = [...new Set([...existingTags, ...newTags])];
+                } else {
+                    item.tags = [...(list.tags || [])];
+                    allItems.set(item.tmdbId, item);
+                }
+            }
+            logger.info(`Fetched ${items.length} items from list (${list.url}).`);
+        } catch (e: any) {
+            logger.error(`Error fetching list ${list.url}:`, e);
+            hasError = true;
+        }
+    }, { concurrency: 5 });
+
+    const uniqueItems = Array.from(allItems.values());
+
+    if (uniqueItems.length > 0) {
+        const targetComponent = componentName === 'letterboxd' ? 'radarr' : 'sonarr';
+        updateComponentStatus(componentName, hasError ? 'error' : 'ok', `Found ${uniqueItems.length} unique items`);
+        logger.info(`Total unique items found across all ${componentName} lists: ${uniqueItems.length}`);
         
         try {
-            await syncMovies(uniqueMovies);
-            updateComponentStatus('radarr', 'ok');
+            // Sync to Radarr/Sonarr
+            await syncItemsFn(uniqueItems);
+            updateComponentStatus(targetComponent, 'ok');
             
-            // Sync Plex (include Radarr global tags + default tag)
-            const radarrTags = config.radarr?.tags || [];
-            await syncPlexMetadata(uniqueMovies, [...radarrTags, RADARR_DEFAULT_TAG], 'movie');
+            // Sync Plex
+            // We pass the component specific default tag (e.g. 'letterboxd') + any global tags from config
+            const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? RADARR_DEFAULT_TAG : SONARR_DEFAULT_TAG];
+            await plex.syncPlexTags(uniqueItems, allPlexTags, plexType);
         } catch (e: any) {
-            updateComponentStatus('radarr', 'error', e.message);
+            updateComponentStatus(targetComponent, 'error', e.message);
             throw e; 
         }
     } else {
         if (hasError) {
-             updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
+             updateComponentStatus(componentName, 'error', 'Failed to fetch any items');
         } else {
-             updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
+             updateComponentStatus(componentName, 'ok', 'No items found in lists');
         }
     }
-  } else {
-      updateComponentStatus('letterboxd', 'disabled');
-      updateComponentStatus('radarr', 'disabled');
-  }
-
-  // Serializd -> Sonarr
-  if (config.serializd.length > 0) {
-    let hasError = false;
-    const allSeries = new Map<string, any>(); // TMDB ID -> Series
-
-    logger.info(`Processing ${config.serializd.length} Serializd lists...`);
-
-    for (const list of config.serializd) {
-      if (!isListActive(list)) {
-        logger.info(`Skipping inactive Serializd list: ${list.id || list.url}`);
-        continue;
-      }
-      try {
-        logger.info(`Fetching Serializd list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-        const scraper = new SerializdScraper(list.url);
-        const series = await scraper.getSeries();
-        
-        for (const item of series) {
-          if (!item.tmdbId) continue;
-
-          // Merge Logic
-          if (allSeries.has(item.tmdbId)) {
-            const existing = allSeries.get(item.tmdbId);
-            const existingTags = existing.tags || [];
-            const newTags = list.tags || [];
-            existing.tags = [...new Set([...existingTags, ...newTags])];
-          } else {
-            item.tags = [...(list.tags || [])];
-            allSeries.set(item.tmdbId, item);
-          }
-        }
-        logger.info(`Fetched ${series.length} series from list.`);
-      } catch (e: any) {
-        logger.error(`Error fetching Serializd list ${list.url}:`, e);
-        hasError = true;
-      }
-    }
-
-    const uniqueSeries = Array.from(allSeries.values());
-
-    if (uniqueSeries.length > 0) {
-        updateComponentStatus('serializd', hasError ? 'error' : 'ok', `Found ${uniqueSeries.length} unique series`);
-        logger.info(`Total unique series found across all lists: ${uniqueSeries.length}`);
-        
-        try {
-            await syncSeries(uniqueSeries);
-            updateComponentStatus('sonarr', 'ok');
-
-            // Sync Plex (include Sonarr global tags + default tag)
-            const sonarrTags = config.sonarr?.tags || [];
-            await syncPlexMetadata(uniqueSeries, [...sonarrTags, SONARR_DEFAULT_TAG], 'show');
-        } catch (e: any) {
-            updateComponentStatus('sonarr', 'error', e.message);
-            throw e; 
-        }
-    } else {
-        if (hasError) {
-             updateComponentStatus('serializd', 'error', 'Failed to fetch any series');
-        } else {
-             updateComponentStatus('serializd', 'ok', 'No series found in lists');
-        }
-    }
-  } else {
-    updateComponentStatus('serializd', 'disabled');
-    updateComponentStatus('sonarr', 'disabled');
-  }
-  
-  logger.info('Sync complete.');
 }
 
-async function syncPlexMetadata(items: any[], extraTags: string[] = [], typeHint?: 'movie' | 'show') {
-  if (!config.plex) return;
-  
-  logger.info(`Syncing Plex metadata for ${items.length} items...`);
-  
-  for (const item of items) {
-      if (!item.tmdbId) continue;
-      
-      const itemTags = item.tags || [];
-      const globalPlexTags = config.plex.tags || [];
-      const allTags = [...new Set([...itemTags, ...globalPlexTags, ...extraTags])];
-      
-      if (allTags.length === 0) continue;
+export async function run() {
+    // 1. Process Letterboxd Lists
+    await processLists<LetterboxdMovie>(
+        config.letterboxd,
+        'letterboxd',
+        async (list) => {
+            // Letterboxd Fetcher + Filter
+            const movies = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
+            
+            // Apply Filters
+            if (list.filters) {
+                return movies.filter(movie => {
+                    const { minRating, minYear, maxYear } = list.filters!;
+                    
+                    if (minRating !== undefined && (movie.rating === undefined || movie.rating === null || movie.rating < minRating)) return false;
+                    if (minYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear < minYear)) return false;
+                    if (maxYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear > maxYear)) return false;
+                    
+                    return true;
+                });
+            }
+            return movies;
+        },
+        syncMovies,
+        'movie',
+        config.radarr?.tags || []
+    );
 
-      logger.info(`[DEBUG] Item ${item.tmdbId} Tags: Extra=${JSON.stringify(extraTags)}, Global=${JSON.stringify(globalPlexTags)}, All=${JSON.stringify(allTags)}`);
-      
-      // We don't want to spam logs if not found, debug inside findItemByTmdbId handles it
-      // Pass title, year (if available), and type hint for fallback search
-      const ratingKey = await plex.findItemByTmdbId(item.tmdbId, item.title || item.name, item.publishedYear || item.year, typeHint);
-      
-      if (ratingKey) {
-          // Atomic update instead of loop to prevent Last-Write-Wins race condition
-          await plex.addLabels(ratingKey, allTags, typeHint);
-      }
-  }
+    // 2. Process Serializd Lists
+    await processLists<ScrapedSeries>(
+        config.serializd,
+        'serializd',
+        async (list) => {
+            // Serializd Fetcher
+            const scraper = new SerializdScraper(list.url);
+            // Note: Filter logic wasn't present for Serializd in original code, 
+            // but we could support it here if ScrapedSeries had the right fields.
+            // For now, just return raw results.
+            return await scraper.getSeries();
+        },
+        syncSeries,
+        'show',
+        config.sonarr?.tags || []
+    );
+  
+  logger.info('Sync complete.');
 }
 
 export async function main() {

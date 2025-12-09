@@ -44,10 +44,10 @@ const envSchema = z.object({
     }
   }
 
-  // Must have at least one source
-  if (!data.LETTERBOXD_URL && !data.SERIALIZD_URL) {
-    return false;
-  }
+  // We typically require one source, BUT if the user is using config.yaml, 
+  // these might be empty. `src/util/config.ts` will handle the final validation 
+  // ensuring at least one list exists from *either* source.
+  // So we remove the strict dependency here.
 
   const hasTakeAmount = data.LETTERBOXD_TAKE_AMOUNT !== undefined;
   const hasTakeStrategy = data.LETTERBOXD_TAKE_STRATEGY !== undefined;
@@ -63,8 +63,8 @@ const envSchema = z.object({
   
   return true;
 }, {
-  message: "Invalid configuration. Ensure Letterboxd/Radarr or Serializd/Sonarr are correctly configured pairs.",
-  path: ["LETTERBOXD_URL", "SERIALIZD_URL"]
+  message: "Invalid configuration. Ensure Radarr/Sonarr settings are correct if provided.",
+  path: ["RADARR_API_URL"] // Generic path as we relaxed the specific check
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -181,27 +181,20 @@ describe('env', () => {
     mockConsoleError.mockRestore();
   });
 
-  it('should fail validation when required field is missing', () => {
-    const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
-      throw new Error('process.exit called');
-    });
-    const mockConsoleError = jest.spyOn(console, 'error').mockImplementation();
-
+  it('should NOT fail validation when required field is missing (relaxed for config.json)', () => {
+    // We now allow missing keys because config.yaml might provide them
     process.env = {
       NODE_ENV: 'test',
       RADARR_API_URL: 'http://localhost:7878',
       RADARR_API_KEY: 'test-api-key',
       RADARR_QUALITY_PROFILE: 'HD-1080p',
-      // Missing LETTERBOXD_URL
+      // Missing LETTERBOXD_URL is now OK at this stage
     };
 
     expect(() => {
       jest.isolateModules(() => {
         require('./env');
       });
-    }).toThrow('process.exit called');
-
-    mockExit.mockRestore();
-    mockConsoleError.mockRestore();
+    }).not.toThrow();
   });
 });

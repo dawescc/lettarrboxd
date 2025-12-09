@@ -89,60 +89,53 @@ export async function getRootFolderById(id: string) {
     }
 }
 
-export async function getOrCreateTag(tagName: string): Promise<number | null> {
+export async function getAllTags(): Promise<Array<{ id: number, label: string }>> {
     try {
-        logger.debug(`Getting or creating tag: ${tagName}`);
-
         const response = await axios.get('/api/v3/tag');
-        const tags = response.data;
-
-        const existingTag = tags.find((tag: any) => tag.label === tagName);
-        if (existingTag) {
-            logger.debug(`Tag already exists: ${tagName} (ID: ${existingTag.id})`);
-            return existingTag.id;
-        }
-
-        logger.debug(`Creating new tag: ${tagName}`);
-        const createResponse = await axios.post('/api/v3/tag', {
-            label: tagName
-        });
-
-        logger.info(`Created tag: ${tagName} (ID: ${createResponse.data.id})`);
-        return createResponse.data.id;
+        return response.data;
     } catch (error) {
-        logger.error(`Error getting or creating tag ${tagName}:`, error as any);
+        logger.error('Error getting all tags:', error as any);
+        return [];
+    }
+}
+
+export async function createTag(label: string): Promise<number | null> {
+    try {
+        logger.debug(`Creating new tag: ${label}`);
+        const response = await axios.post('/api/v3/tag', { label });
+        return response.data.id;
+    } catch (error) {
+        logger.error(`Error creating tag ${label}:`, error as any);
         return null;
     }
 }
 
-function parseConfiguredTags(): string[] {
-    const tags = [DEFAULT_TAG_NAME];
+export async function ensureTagsAreAvailable(requiredTags: string[]): Promise<Map<string, number>> {
+    const tagMap = new Map<string, number>();
+    const distinctTags = [...new Set(requiredTags)];
+    
+    if (distinctTags.length === 0) return tagMap;
 
-    if (env.RADARR_TAGS) {
-        const userTags = env.RADARR_TAGS
-            .split(',')
-            .map(tag => tag.trim())
-            .filter(tag => tag.length > 0);
-        tags.push(...userTags);
+    // 1. Fetch all existing tags ONCE
+    const existingTags = await getAllTags();
+    existingTags.forEach(t => tagMap.set(t.label, t.id));
+
+    // 2. Find which ones are missing
+    const missingTags = distinctTags.filter(t => !tagMap.has(t));
+
+    if (missingTags.length > 0) {
+        logger.info(`Creating ${missingTags.length} new tags in Radarr...`);
+        // Create them sequentially to avoid race conditions or rate limits, 
+        // but we assume they don't exist because we just checked the fresh list.
+        for (const tagLabel of missingTags) {
+            const newId = await createTag(tagLabel);
+            if (newId) {
+                tagMap.set(tagLabel, newId);
+            }
+        }
     }
 
-    return [...new Set(tags)];
-}
-
-export async function getAllRequiredTagIds(): Promise<number[]> {
-    const tagNames = parseConfiguredTags();
-    const tagIdPromises = tagNames.map(tagName => getOrCreateTag(tagName));
-    const tagIdsRaw = await Promise.all(tagIdPromises);
-    const tagIds = tagIdsRaw.filter((tagId): tagId is number => tagId !== null);
-
-    // Log warnings for any failed tag creations
-    tagNames.forEach((tagName, index) => {
-        if (tagIdsRaw[index] === null) {
-            logger.warn(`Failed to create or retrieve tag: ${tagName}`);
-        }
-    });
-
-    return tagIds;
+    return tagMap;
 }
 
 export async function getAllMovies(): Promise<any[]> {
@@ -203,13 +196,11 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
 
     // --- Tag Resolution ---
 
-    // 1. Resolve System Tags (Config + Global Env)
-    // We combine env.RADARR_TAGS and config.radarr.tags
+    // 1. Collect ALL required tags (System + Movies)
     const envTags = (env.RADARR_TAGS || '').split(',').map(t => t.trim()).filter(t => t.length > 0);
     const configTags = radarrConfig?.tags || [];
     const systemTagNames = [...new Set([DEFAULT_TAG_NAME, ...envTags, ...configTags])];
 
-    // 2. Resolve Per-Movie Tags
     const movieTagNames = new Set<string>();
     movies.forEach(m => {
         if (m.tags) {
@@ -217,19 +208,16 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
         }
     });
 
-    // 3. Create IDs for ALL unique tags found
-    const allUniqueTags = new Set([...systemTagNames, ...movieTagNames]);
-    const tagMap = new Map<string, number>();
+    const allRequiredTags = [...new Set([...systemTagNames, ...movieTagNames])];
 
-    logger.info(`Resolving ${allUniqueTags.size} tags...`);
-    for (const tagName of allUniqueTags) {
-        const id = await getOrCreateTag(tagName);
-        if (id) {
-            tagMap.set(tagName, id);
-        }
-    }
+    // 2. Resolve IDs (Batch operation)
+    logger.info(`Resolving ${allRequiredTags.length} tags...`);
+    const tagMap = await ensureTagsAreAvailable(allRequiredTags);
 
-    const startSystemTagIds = systemTagNames.map(name => tagMap.get(name)).filter((id): id is number => id !== undefined);
+    const startSystemTagIds = systemTagNames
+        .map(name => tagMap.get(name))
+        .filter((id): id is number => id !== undefined);
+        
     const letterboxdTagId = tagMap.get(DEFAULT_TAG_NAME);
 
     // --- Sync Logic ---

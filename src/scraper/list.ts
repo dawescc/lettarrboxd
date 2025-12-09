@@ -43,10 +43,15 @@ export class ListScraper implements Scraper {
             const pageLinks = this.getMovieLinksFromHtml(html);
             allLinks.push(...pageLinks);
             
-            currentUrl = this.getNextPageUrl(html);
-            
-            if (currentUrl) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+            if (this.take && allLinks.length >= this.take) {
+                logger.debug(`Reached take limit (${this.take}). Stopping pagination.`);
+                currentUrl = null;
+            } else {
+                currentUrl = this.getNextPageUrl(html);
+                
+                if (currentUrl) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
             }
         }
         

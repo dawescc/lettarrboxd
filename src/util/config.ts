@@ -182,3 +182,4 @@ function loadConfig(): Config {
 
 const config = loadConfig();
 export default config;
+export { loadConfig };

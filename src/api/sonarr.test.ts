@@ -39,11 +39,12 @@ jest.mock('../util/retry', () => ({
 }));
 
 import {
-  getQualityProfileId,
-  getSeriesLookup,
-  syncSeries,
+  ensureTagsAreAvailable,
   getAllSeries,
   deleteSeries,
+  syncSeries,
+  getSeriesLookup,
+  getQualityProfileId,
 } from './sonarr';
 
 describe('sonarr API', () => {
@@ -55,29 +56,40 @@ describe('sonarr API', () => {
     env.DRY_RUN = false;
   });
 
-  describe('getQualityProfileId', () => {
-    it('should return quality profile ID when profile exists', async () => {
+  describe('ensureTagsAreAvailable', () => {
+    it('should return map of existing tags', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: [
-          { id: 1, name: 'SD' },
-          { id: 2, name: 'HD-1080p' },
+          { id: 1, label: 'serializd' },
+          { id: 2, label: 'other' },
         ],
       });
 
-      const result = await getQualityProfileId('HD-1080p');
+      const startTags = ['serializd', 'other'];
+      const result = await ensureTagsAreAvailable(startTags);
 
-      expect(result).toBe(2);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/qualityprofile');
+      expect(result.get('serializd')).toBe(1);
+      expect(result.get('other')).toBe(2);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/tag');
     });
 
-    it('should return null when profile does not exist', async () => {
+    it('should create missing tags', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [{ id: 1, name: 'SD' }],
+        data: [{ id: 1, label: 'existing' }],
       });
 
-      const result = await getQualityProfileId('HD-1080p');
+      mockAxiosInstance.post.mockResolvedValueOnce({
+        data: { id: 2, label: 'newtag' },
+      });
 
-      expect(result).toBeNull();
+      const tags = ['existing', 'newtag'];
+      const result = await ensureTagsAreAvailable(tags);
+
+      expect(result.get('existing')).toBe(1);
+      expect(result.get('newtag')).toBe(2);
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/tag', {
+        label: 'newtag',
+      });
     });
   });
 

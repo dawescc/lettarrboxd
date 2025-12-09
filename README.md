@@ -244,7 +244,7 @@ At least one pair of source/destination variables must be configured.
 
 ### Optional Environment Variables
 
-### Plex (Optional - v1.6.2+)
+### Plex (Optional - v1.7.0+)
 | Variable | Description |
 | :--- | :--- |
 | `PLEX_URL` | URL of your Plex server (e.g. `http://192.168.1.50:32400`) |
@@ -309,7 +309,7 @@ sonarr:
    tags: [ "global-tag" ]
 ```
 
-### Scheduled Lists (v1.6.1+)
+### Scheduled Lists (v1.7.0+)
 You can define optional `activeFrom` and `activeUntil` dates (MM-DD) for any list. The list will only be processed if the current date falls within the range.
 
 ```yaml
@@ -323,7 +323,7 @@ letterboxd:
 *Note: If `REMOVE_MISSING_ITEMS` is true, movies from inactive lists will be removed from Radarr/Sonarr.*
 
 
-### Plex Integration (v1.6.1+)
+### Plex Integration (v1.7.0+)
 You can automatically apply labels to your Plex content matching your Letterboxd tags.
 
 ```yaml
