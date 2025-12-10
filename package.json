@@ -1,9 +1,9 @@
 {
   "name": "lettarrboxd",
-  "version": "1.7.3-beta",
+  "version": "2.0.0-beta",
   "main": "src/index.ts",
-  "repository": "git@github.com:ryanpag3/lettarrboxd.git",
-  "author": "Ryan Page <ryanapage@gmail.com>",
+  "repository": "git@github.com:dawescc/lettarrboxd.git",
+  "author": "Ryan Dawes <dev@dawes.cc>",
   "license": "MIT",
   "private": true,
   "scripts": {

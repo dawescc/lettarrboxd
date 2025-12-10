@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lettarrboxd is a TypeScript Bun application that automatically syncs Letterboxd watchlist movies to Radarr and Serializd TV shows to Sonarr. It continuously monitors a user's watchlists for new additions and automatically adds them to the respective media managers.
+Lettarrboxd is a TypeScript Bun application that automatically syncs Letterboxd lists/watchlists to Radarr and Serializd public lists/watchlists to Sonarr. It continuously monitors user lists for new additions and automatically adds them to the respective media managers.
 
 ## Commands
 
@@ -17,7 +17,7 @@ Lettarrboxd is a TypeScript Bun application that automatically syncs Letterboxd 
 
 ### Docker
 - `docker build -t lettarrboxd .` - Build Docker image
-- `docker run -d --env-file .env -v ./data:/data lettarrboxd` - Run container
+- `docker run -d --env-file .env -v ./data:/app/data dawescc/lettarrboxd:latest` - Run container
 
 ## Environment Configuration
 

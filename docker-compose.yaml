@@ -1,7 +1,7 @@
 services:
   # Single instance example - watches one list
   lettarrboxd:
-    image: ryanpage/lettarrboxd:latest
+    image: dawescc/lettarrboxd:latest
     container_name: lettarrboxd
     environment:
       # Required variables
@@ -43,7 +43,7 @@ services:
   #     - RADARR_TAGS=watchlist,personal
   #     - CHECK_INTERVAL_MINUTES=60
   #   volumes:
-  #     - ./data/watchlist:/data
+  #     - ./data/watchlist:/app/data
   #   restart: unless-stopped
 
   # lettarrboxd-criterion:
@@ -57,7 +57,7 @@ services:
   #     - RADARR_TAGS=criterion,classics
   #     - CHECK_INTERVAL_MINUTES=120
   #   volumes:
-  #     - ./data/criterion:/data
+  #     - ./data/criterion:/app/data
   #   restart: unless-stopped
 
   # lettarrboxd-nolan:
@@ -71,5 +71,5 @@ services:
   #     - RADARR_TAGS=nolan,director-filmography
   #     - CHECK_INTERVAL_MINUTES=1440  # Check once per day
   #   volumes:
-  #     - ./data/nolan:/data
+  #     - ./data/nolan:/app/data
   #   restart: unless-stopped

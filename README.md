@@ -1,410 +1,157 @@
 # Lettarrboxd
 
-Automatically sync your Letterboxd lists to Radarr for seamless movie management.
+**Automated Media Sync: Letterboxd → Radarr & Serializd → Sonarr**
 
-## Overview
+> **Note**: This is a significantly enhanced fork of the original [ryanpage/lettarrboxd](https://github.com/ryanpage/lettarrboxd) project. It features a complete rewrite of the core logic to support multiple lists, filtering, list scheduling, Plex integration, and a high-performance Bun runtime.
 
-Lettarrboxd is an application that monitors your Letterboxd lists (watchlists, regular lists, watched movies, filmographies, collections, etc.) and Serializd watchlists, automatically pushing new movies to Radarr and series to Sonarr. It runs continuously, checking for updates at configurable intervals and only processing new additions to avoid duplicate API calls.
+---
 
-## Supported Letterboxd URLs
+## 🚀 Features
 
-The application supports various types of Letterboxd URLs for the `LETTERBOXD_URL` environment variable:
+*   **Dual-Service Sync**:
+    *   **Movies**: Syncs Letterboxd Watchlists, Lists, Filmographies, and Collections directly to **Radarr**.
+    *   **TV Shows**: Syncs Serializd Watchlists and User Lists directly to **Sonarr**.
+*   **Smart Automation**:
+    *   **Multiple Lists**: Monitor unlimited lists from varying sources simultaneously.
+    *   **Granular Control**: Override Quality Profiles, Root Folders, and Tags on a *per-list* basis (e.g., "4K" for specific lists, "1080p" for others).
+    *   **Filtering**: Filter source lists by Year, Rating, or Genre before syncing.
+    *   **Scheduling**: Define `activeFrom` and `activeUntil` dates for seasonal lists (e.g., automatically sync Horror lists only in October).
+*   **Ecosystem Integration**:
+    *   **Plex**: Automatically tag items in your Plex library to match their source lists.
+    *   **Cleanup**: Optionally remove items from your media server when they are removed from the source list (`REMOVE_MISSING_ITEMS`).
+*   **Performance**:
+    *   Built on **Bun** for instant startup and low memory footprint.
+    *   Includes a built-in Health Check server for Docker/Kubernetes readiness probes.
 
-- **Watchlists**: `https://letterboxd.com/username/watchlist/`
-- **Regular Lists**: `https://letterboxd.com/username/list/list-name/`
-- **Watched Movies**: `https://letterboxd.com/username/films/`
-- **Collections**: `https://letterboxd.com/films/in/collection-name/`
-- **Popular Movies**: `https://letterboxd.com/films/popular/`
-- **Actor Filmography**: `https://letterboxd.com/actor/actor-name/`
-- **Director Filmography**: `https://letterboxd.com/director/director-name/`
-- **Writer Filmography**: `https://letterboxd.com/writer/writer-name/`
+---
 
-## Supported Serializd URLs
+## 🛠️ Quick Start (Simple Mode)
 
-The application supports Serializd watchlists for the `SERIALIZD_URL` environment variable:
-
-- **Watchlists**: `https://www.serializd.com/user/username/watchlist`
-
-### Examples
-```bash
-# User's Letterboxd watchlist
-LETTERBOXD_URL=https://letterboxd.com/moviefan123/watchlist/
-
-# User's Serializd watchlist
-SERIALIZD_URL=https://www.serializd.com/user/tvfan123/watchlist
-
-# User's custom list
-LETTERBOXD_URL=https://letterboxd.com/dave/list/official-top-250-narrative-feature-films/
-
-# User's watched movies
-LETTERBOXD_URL=https://letterboxd.com/moviefan123/films/
-
-# Movie collection
-LETTERBOXD_URL=https://letterboxd.com/films/in/the-dark-knight-collection/
-
-# Popular movies
-LETTERBOXD_URL=https://letterboxd.com/films/popular/
-
-# Another user's list
-LETTERBOXD_URL=https://letterboxd.com/criterion/list/the-criterion-collection/
-
-# Actor filmography (e.g., Tom Hanks)
-LETTERBOXD_URL=https://letterboxd.com/actor/tom-hanks/
-
-# Director filmography (e.g., Christopher Nolan)
-LETTERBOXD_URL=https://letterboxd.com/director/christopher-nolan/
-
-# Writer filmography (e.g., Aaron Sorkin)
-LETTERBOXD_URL=https://letterboxd.com/writer/aaron-sorkin/
-```
-
-**Note**: All lists must be public for the application to access them.
-
-## Quick Start
-
-### Docker
+For simple use cases (one Movie list + one TV list), you can configure everything via text environment variables.
 
 ```bash
 docker run -d \
   --name lettarrboxd \
-  -e LETTERBOXD_URL=https://letterboxd.com/your_username/watchlist/ \
-  -e RADARR_API_URL=http://your-radarr:7878 \
-  -e RADARR_API_KEY=your_api_key \
+  -e LETTERBOXD_URL=https://letterboxd.com/yourname/watchlist/ \
+  -e RADARR_API_URL=http://radarr:7878 \
+  -e RADARR_API_KEY=your_key \
   -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e SERIALIZD_URL=https://www.serializd.com/user/your_username/watchlist \
-  -e SONARR_API_URL=http://your-sonarr:8989 \
-  -e SONARR_API_KEY=your_sonarr_key \
+  -e SERIALIZD_URL=https://www.serializd.com/user/yourname/watchlist \
+  -e SONARR_API_URL=http://sonarr:8989 \
+  -e SONARR_API_KEY=your_key \
   -e SONARR_QUALITY_PROFILE="HD-1080p" \
   -e SONARR_ROOT_FOLDER_PATH="/tv" \
-  -e DRY_RUN=false \
-  ryanpage/lettarrboxd:latest
+  ghcr.io/dawescc/lettarrboxd:latest
 ```
 
-For testing purposes, you can enable dry run mode:
-```bash
-docker run -d \
-  --name lettarrboxd-test \
-  -e LETTERBOXD_URL=https://letterboxd.com/your_username/watchlist/ \
-  -e RADARR_API_URL=http://your-radarr:7878 \
-  -e RADARR_API_KEY=your_api_key \
-  -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e DRY_RUN=true \
-  ryanpage/lettarrboxd:latest
-```
-See [docker-compose.yaml](./docker-compose.yaml) for complete example.
+---
 
-## Watching Multiple Lists
+## ⚡ Advanced Configuration (Recommended)
 
-To monitor multiple Letterboxd lists simultaneously, deploy one lettarrboxd instance per list. Each instance operates independently with its own configuration, allowing you to:
+To unlock the full power of Lettarrboxd (multiple lists, filtering, overrides), use a `config.yaml` file.
 
-- Watch different lists with different quality profiles
-- Use custom tags to organize movies from different sources
-- Set different check intervals for each list
-- Maintain separate data directories to track each list's state
-
-### Docker Compose Multi-List Example
+1.  Download [config.example.yaml](config.example.yaml) and save it as `config.yaml`.
+2.  Edit it with your desired lists and settings.
+3.  Mount it into your container:
 
 ```yaml
 services:
-  lettarrboxd-watchlist:
-    image: ryanpage/lettarrboxd:latest
-    container_name: lettarrboxd-watchlist
-    environment:
-      - LETTERBOXD_URL=https://letterboxd.com/your_username/watchlist/
-      - RADARR_API_URL=http://radarr:7878
-      - RADARR_API_KEY=your_api_key
-      - RADARR_QUALITY_PROFILE=HD-1080p
-      - RADARR_TAGS=watchlist,personal
-      - CHECK_INTERVAL_MINUTES=60
+  lettarrboxd:
+    image: ghcr.io/dawescc/lettarrboxd:latest
+    container_name: lettarrboxd
     volumes:
-      - ./data/watchlist:/data
-    restart: unless-stopped
-
-  lettarrboxd-criterion:
-    image: ryanpage/lettarrboxd:latest
-    container_name: lettarrboxd-criterion
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data  # Persistent storage for state tracking
     environment:
-      - LETTERBOXD_URL=https://letterboxd.com/criterion/list/the-criterion-collection/
-      - RADARR_API_URL=http://radarr:7878
-      - RADARR_API_KEY=your_api_key
-      - RADARR_QUALITY_PROFILE=HD-1080p
-      - RADARR_TAGS=criterion,classics
-      - CHECK_INTERVAL_MINUTES=120
-    volumes:
-      - ./data/criterion:/data
-    restart: unless-stopped
-
-  lettarrboxd-nolan:
-    image: ryanpage/lettarrboxd:latest
-    container_name: lettarrboxd-nolan
-    environment:
-      - LETTERBOXD_URL=https://letterboxd.com/director/christopher-nolan/
-      - RADARR_API_URL=http://radarr:7878
-      - RADARR_API_KEY=your_api_key
-      - RADARR_QUALITY_PROFILE=Ultra HD
-      - RADARR_TAGS=nolan,director-filmography
-      - CHECK_INTERVAL_MINUTES=1440  # Check once per day
-    volumes:
-      - ./data/nolan:/data
+      # You can still keep sensitive keys in ENV
+      - RADARR_API_KEY=your_key
+      - SONARR_API_KEY=your_key
     restart: unless-stopped
 ```
 
-### Docker CLI Multi-List Example
-
-```bash
-# Watch your personal watchlist
-docker run -d \
-  --name lettarrboxd-watchlist \
-  -e LETTERBOXD_URL=https://letterboxd.com/your_username/watchlist/ \
-  -e RADARR_API_URL=http://radarr:7878 \
-  -e RADARR_API_KEY=your_api_key \
-  -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e RADARR_TAGS="watchlist,personal" \
-  -e CHECK_INTERVAL_MINUTES=60 \
-  -v ./data/watchlist:/data \
-  ryanpage/lettarrboxd:latest
-
-# Watch the Criterion Collection
-docker run -d \
-  --name lettarrboxd-criterion \
-  -e LETTERBOXD_URL=https://letterboxd.com/criterion/list/the-criterion-collection/ \
-  -e RADARR_API_URL=http://radarr:7878 \
-  -e RADARR_API_KEY=your_api_key \
-  -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e RADARR_TAGS="criterion,classics" \
-  -e CHECK_INTERVAL_MINUTES=120 \
-  -v ./data/criterion:/data \
-  ryanpage/lettarrboxd:latest
-
-# Watch Christopher Nolan's filmography
-docker run -d \
-  --name lettarrboxd-nolan \
-  -e LETTERBOXD_URL=https://letterboxd.com/director/christopher-nolan/ \
-  -e RADARR_API_URL=http://radarr:7878 \
-  -e RADARR_API_KEY=your_api_key \
-  -e RADARR_QUALITY_PROFILE="Ultra HD" \
-  -e RADARR_TAGS="nolan,director-filmography" \
-  -e CHECK_INTERVAL_MINUTES=1440 \
-  -v ./data/nolan:/data \
-  ryanpage/lettarrboxd:latest
-```
-
-### Best Practices for Multi-List Setup
-
-1. **Unique Container Names**: Each instance must have a unique container name (e.g., `lettarrboxd-watchlist`, `lettarrboxd-criterion`)
-
-2. **Separate Data Directories**: Use different volume mounts for each instance to maintain independent state tracking:
-   ```yaml
-   volumes:
-     - ./data/watchlist:/data    # Instance 1
-     - ./data/criterion:/data    # Instance 2
-   ```
-
-3. **Distinctive Tags**: Use the `RADARR_TAGS` variable to organize movies by source:
-   ```yaml
-   - RADARR_TAGS=watchlist,personal
-   - RADARR_TAGS=criterion,classics
-   - RADARR_TAGS=nolan,director-filmography
-   ```
-
-4. **Appropriate Check Intervals**: Adjust `CHECK_INTERVAL_MINUTES` based on how frequently each list updates:
-   - Personal watchlists: 30-60 minutes
-   - Curated lists: 2-24 hours
-   - Static collections: 24 hours or more
-
-5. **Quality Profiles**: Each instance can use different quality profiles based on content type:
-   ```yaml
-   - RADARR_QUALITY_PROFILE=HD-1080p      # Standard content
-   - RADARR_QUALITY_PROFILE=Ultra HD       # Premium content
-   ```
-
-## Configuration
-
-### Required Environment Variables
-
-At least one pair of source/destination variables must be configured.
-
-#### Letterboxd -> Radarr
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `LETTERBOXD_URL` | Your Letterboxd list URL | `https://letterboxd.com/moviefan123/watchlist/` |
-| `RADARR_API_URL` | Radarr base URL | `http://radarr:7878` |
-| `RADARR_API_KEY` | Radarr API key | `abc123...` |
-| `RADARR_QUALITY_PROFILE` | Quality profile name in Radarr | `HD-1080p` |
-
-#### Serializd -> Sonarr
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `SERIALIZD_URL` | Your Serializd watchlist URL | `https://www.serializd.com/user/username/watchlist` |
-| `SONARR_API_URL` | Sonarr base URL | `http://sonarr:8989` |
-| `SONARR_API_KEY` | Sonarr API key | `abc123...` |
-| `SONARR_QUALITY_PROFILE` | Quality profile name in Sonarr | `HD-1080p` |
-| `SONARR_ROOT_FOLDER_PATH` | Root folder path for series | `/tv` |
-| `SONARR_SEASON_MONITORING` | Season monitoring strategy (`all`, `first`, `latest`, `future`, `none`) | `all` |
-
-### Optional Environment Variables
-
-### Plex (Optional - v1.7.0+)
-| Variable | Description |
-| :--- | :--- |
-| `PLEX_URL` | URL of your Plex server (e.g. `http://192.168.1.50:32400`) |
-| `PLEX_TOKEN` | Your Plex Authentication Token |
-| `PLEX_TAGS` | Comma-separated list of labels to apply (default: `lettarrboxd`) |
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHECK_INTERVAL_MINUTES` | `10` | How often to check for new items (minimum 10) |
-| `RADARR_MINIMUM_AVAILABILITY` | `released` | When movie becomes available (`announced`, `inCinemas`, `released`) |
-| `RADARR_ROOT_FOLDER_ID` | - | Specific root folder ID to use in Radarr (uses first available if not set) |
-| `RADARR_ADD_UNMONITORED` | `false` | When `true`, adds movies to Radarr in an unmonitored state |
-| `RADARR_TAGS` | - | Additional tags to apply to movies (comma-separated). Movies are always tagged with `letterboxd` |
-| `LETTERBOXD_TAKE_AMOUNT` | - | Number of movies to sync (requires `LETTERBOXD_TAKE_STRATEGY`) |
-| `LETTERBOXD_TAKE_STRATEGY` | - | Movie selection strategy: `newest` or `oldest` (requires `LETTERBOXD_TAKE_AMOUNT`) |
-| `DRY_RUN` | `false` | When `true`, logs what would be added without making actual API calls |
-| `REMOVE_MISSING_ITEMS` | `false` | When `true`, removes items from Radarr/Sonarr that are no longer in the watchlist (requires `letterboxd`/`serializd` tag) |
-| `DATA_DIR` | `/data` | Directory for storing application data. You generally do not need to worry about this. |
-
-## Advanced Configuration (config.yaml)
-
-For more complex setups, such as monitoring multiple lists with different rules, you can use a `config.yaml` file in the root directory (or mounted via Docker).
-
-This configuration method allows you to:
-- Monitor multiple Letterboxd and Serializd lists without running multiple containers.
-- Apply filters (e.g., Minimum Rating, Release Year).
-- Use specific tags for each list.
-
-### Example `config.yaml`
+### What you can do with `config.yaml`:
 
 ```yaml
 letterboxd:
-  - url: https://letterboxd.com/user/list/horror-gems/
-    takeAmount: 10
-    takeStrategy: newest
-    tags: 
-      - horror
-      - gems
-    filters:
-      minRating: 7.0 
-      minYear: 1980
-      maxYear: 2024
-
+  # 1. Standard Watchlist
   - url: https://letterboxd.com/user/watchlist/
-    tags: 
-      - watchlist
-    # No filters = grab everything
+    tags: [watchlist]
+
+  # 2. Curated "Best 4K Horror" List
+  - url: https://letterboxd.com/user/list/horror-masterpieces/
+    # Override global quality to 4K
+    qualityProfile: "Ultra HD" 
+    tags: [horror, 4k]
+    # Filter: Only sync high-rated movies
+    filters:
+      minRating: 3.5
+
+  # 3. Seasonal List (Halloween)
+  - url: https://letterboxd.com/user/list/all-hallows-eve/
+    tags: [halloween]
+    # Only active during October
+    activeFrom: "10-01"
+    activeUntil: "10-31"
 
 serializd:
   - url: https://www.serializd.com/user/username/watchlist
-    tags: 
-      - tv-watchlist
-
-radarr:
-  qualityProfile: "Ultra HD"
-  rootFolder: "/movies"  # Or use ID: 1
-  tags: [ "global-tag" ]
-
-sonarr:
-   qualityProfile: "HD-1080p"
-   rootFolder: "/tv"
-   tags: [ "global-tag" ]
+    tags: [tv-watchlist]
 ```
 
-### Scheduled Lists (v1.7.0+)
-You can define optional `activeFrom` and `activeUntil` dates (MM-DD) for any list. The list will only be processed if the current date falls within the range.
+---
 
-```yaml
-letterboxd:
-  - id: "christmas-classics"
-    url: "https://letterboxd.com/user/list/xmas/"
-    tags: ["christmas"]
-    activeFrom: "12-01"  # Only starts syncing on Dec 1st
-    activeUntil: "12-26" # Stops syncing (and removes movies if configured) on Dec 26th
-```
-*Note: If `REMOVE_MISSING_ITEMS` is true, movies from inactive lists will be removed from Radarr/Sonarr.*
+## 📋 Supported Sources
 
+### Letterboxd (Movies)
+Lettarrboxd can scrape almost any type of list:
+*   **Watchlist**: `.../username/watchlist/`
+*   **Lists**: `.../username/list/list-name/`
+*   **Filmography (Actor/Director/Writer)**: `.../director/christopher-nolan/`
+*   **Collections**: `.../films/in/the-avengers-collection/`
+*   **Popular**: `.../films/popular/`
 
-### Plex Integration (v1.7.0+)
-You can automatically apply labels to your Plex content matching your Letterboxd tags.
+### Serializd (TV Shows)
+*   **Watchlist**: `.../user/username/watchlist`
+*   **User Lists**: `.../user/username/lists/list-name`
 
-```yaml
-plex:
-  url: "http://192.168.1.100:32400"
-  token: "your-plex-token"
-  tags: ["lettarrboxd"] # Labels applied to everything synced
-```
-*Note: This runs after the Radarr/Sonarr sync. It matches items by TMDB ID.*
+---
 
+## ⚙️ Configuration Reference
 
-Mount your config file to `/app/config.yaml` (or rely on the default check in root if you build your own image, but mounting is preferred).
+See [config.example.yaml](config.example.yaml) for the comprehensive list of all available options.
 
-```bash
-docker run -d \
-  --name lettarrboxd \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  -e RADARR_API_URL=... \
-  -e RADARR_API_KEY=... \
-  ryanpage/lettarrboxd:latest
-```
+### Common Environment Variables
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CHECK_INTERVAL_MINUTES` | `60` | Frequency of sync checks |
+| `REMOVE_MISSING_ITEMS` | `false` | **CAUTION**: If true, items removed from your list will be deleted/unmonitored in Radarr/Sonarr |
+| `DRY_RUN` | `false` | Log planned actions without executing them |
 
-*Note: You still need to provide invalid env vars for API keys if you don't put them in the config file (recommended to keep keys in ENV).*
+### Plex Integration (Optional)
+Sync your tags to Plex to create smart collections easily.
+| Variable | Description |
+| :--- | :--- |
+| `PLEX_URL` | e.g., `http://192.168.1.50:32400` |
+| `PLEX_TOKEN` | Your Plex Auth Token |
+| `PLEX_TAGS` | Comma-separated labels to apply (e.g. `lettarrboxd`) |
 
-## Development
+---
 
-### Prerequisites
+## 🐳 Docker Deployment
 
-- Bun 1.0+
+### Official Image
+`ghcr.io/dawescc/lettarrboxd:latest`
 
-### Setup
+### Health Check
+The container exposes a health check endpoint on port `3000`.
+*   `GET /health`: Returns `200 OK` if idle/syncing, `500` if the last sync job failed.
 
-```bash
-# Clone the repository
-git clone https://github.com/ryanpag3/lettarrboxd.git
-cd lettarrboxd
+---
 
-# Install dependencies
-bun install
-
-# Create environment file
-cp .env.example .env
-# Edit .env with your configuration
-
-# Run in development mode
-bun run start:dev
-```
-
-### Development Commands
-
-```bash
-bun run start:dev    # Run with auto-reload
-bun run typecheck    # Type check (tsc)
-bun run test         # Run tests (Jest)
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## Troubleshooting
-
-### Common Issues
-
-**Movies not being added**
-- Verify your Radarr API key and URL are correct
-- Check that the quality profile name matches exactly (case-sensitive)
-- Ensure your Letterboxd list is public
-
-**Docker container won't start**
-- Verify all required environment variables are set
-- Check container logs: `docker logs lettarrboxd`
-
-## License
+## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Legal Disclaimer
+---
 
-This project is intended for use with legally sourced media only. It is designed to help users organize and manage their personal media collections. The developers of Lettarrboxd do not condone or support piracy in any form. Users are solely responsible for ensuring their use of this software complies with all applicable laws and regulations in their jurisdiction.
+*Disclaimer: This project is intended for use with legally sourced media only. The developers are not responsible for any legal issues that may arise from the use of this project.*

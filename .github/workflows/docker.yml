@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 env:
-  IMAGE_NAME: ryanpage/lettarrboxd
+  IMAGE_NAME: dawescc/lettarrboxd
 
 jobs:
   docker:

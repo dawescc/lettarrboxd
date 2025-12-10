@@ -313,7 +313,7 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
 
     existingSeries.forEach((s: any) => {
         if (s.tvdbId) existingTvdbIds.add(s.tvdbId);
-        // Note: s.tmdbId might not always be present, but we use it if it is to save lookups
+
         if (s.tmdbId) tmdbToTvdbMap.set(s.tmdbId, s.tvdbId);
     });
 

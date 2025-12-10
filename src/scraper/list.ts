@@ -32,7 +32,7 @@ export class ListScraper implements Scraper {
         const allLinks: string[] = [];
         
         while (currentUrl) {
-            logger.debug(`Fetching page: ${currentUrl}`);
+            logger.info(`Fetching page: ${currentUrl}`);
             
             const response = await fetch(currentUrl);
             if (!response.ok) {
@@ -66,24 +66,22 @@ export class ListScraper implements Scraper {
         
         logger.debug(`Parsing HTML length: ${html.length}`);
 
-        // Strategy 1: React Component (Modern Lists)
+        // React Component (Modern Lists)
         $('.react-component[data-target-link]').each((_, element) => {
             const filmLink = $(element).attr('data-target-link');
             if (filmLink) links.push(filmLink);
         });
 
-        // Strategy 2: Poster Container (Classic/Fallback)
+        // Poster Container (Classic/Fallback)
         if (links.length === 0) {
-            logger.debug('Strategy 1 failed. Trying Strategy 2 (Poster Items)...');
             $('.poster-container div[data-target-link]').each((_, element) => {
                 const filmLink = $(element).attr('data-target-link');
                 if (filmLink) links.push(filmLink);
             });
         }
         
-        // Strategy 3: Direct Poster Item (Found in manual Curl)
+        // Direct Poster Item
         if (links.length === 0) {
-            logger.debug('Strategy 2 failed. Trying Strategy 3 (Direct Poster Item)...');
             $('.posteritem div[data-target-link]').each((_, element) => {
                 const filmLink = $(element).attr('data-target-link');
                 if (filmLink) links.push(filmLink);

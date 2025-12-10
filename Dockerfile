@@ -5,7 +5,7 @@ LABEL org.opencontainers.image.source=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.url=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.description="Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr."
 LABEL org.opencontainers.image.licenses=MIT
-LABEL org.opencontainers.image.version="1.7.3-beta"
+LABEL org.opencontainers.image.version="2.0.0-beta"
 
 WORKDIR /app
 
@@ -20,18 +20,18 @@ RUN bun install --frozen-lockfile --production && \
 COPY . .
 
 # Create data directory
-RUN mkdir -p /data
+RUN mkdir -p /app/data
 
 # Set environment variables
 ENV NODE_ENV=production
-ENV DATA_DIR=/data
+ENV DATA_DIR=/app/data
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S lettarrboxd && \
     adduser -S lettarrboxd -u 1001 -G lettarrboxd
 
 # Change ownership of app and data directories
-RUN chown -R lettarrboxd:lettarrboxd /app /data
+RUN chown -R lettarrboxd:lettarrboxd /app /app/data
 
 # Switch to non-root user
 USER lettarrboxd

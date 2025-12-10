@@ -180,9 +180,6 @@ export async function run() {
         async (list) => {
             // Serializd Fetcher
             const scraper = new SerializdScraper(list.url);
-            // Note: Filter logic wasn't present for Serializd in original code, 
-            // but we could support it here if ScrapedSeries had the right fields.
-            // For now, just return raw results.
             return await scraper.getSeries();
         },
         syncSeries,

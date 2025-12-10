@@ -179,19 +179,26 @@ export async function addLabels(ratingKey: string, labels: string[], typeHint?: 
             
             logger.info(`[DEBUG] Item ${ratingKey} Existing Labels: ${JSON.stringify(existingLabels)}`);
 
-            // 2. Merge existing + new labels (deduplicated)
-            const missingLabels = labels.filter(l => !existingLabels.includes(l));
+            // 2. Merge existing + new labels (deduplicated case-insensitively)
+            const normalizedExisting = new Map(existingLabels.map((l: string) => [l.toLowerCase(), l]));
             
-            if (missingLabels.length === 0) {
-                logger.info(`[DEBUG] Plex item ${ratingKey} already has all tags. Skipping update.`);
+            // Add new labels if their lower-case version doesn't exist
+            labels.forEach(l => {
+                if (!normalizedExisting.has(l.toLowerCase())) {
+                    normalizedExisting.set(l.toLowerCase(), l);
+                }
+            });
+
+            const finalLabels = Array.from(normalizedExisting.values());
+
+            // Verify if update is needed
+            if (finalLabels.length === existingLabels.length && 
+                existingLabels.every((l: string) => normalizedExisting.has(l.toLowerCase()))) {
+                logger.info(`[DEBUG] Plex item ${ratingKey} tags are already in sync. Skipping update.`);
                 return;
             }
             
-            const finalLabels = [...new Set([...existingLabels, ...labels])];
-
-            // Construct manual query string for literal brackets
-            // XML attribute is 'tag', so parameter should be label[i].tag.tag
-            // Previous attempt used .value which is likely why it was ignored
+            // Construct query string for Plex API (requires literal brackets for array items)
             const queryParts = finalLabels.map((l: string, i: number) => {
                 return `label[${i}].tag.tag=${encodeURIComponent(l)}`;
             });
@@ -210,7 +217,7 @@ export async function addLabels(ratingKey: string, labels: string[], typeHint?: 
             
             logger.info(`[DEBUG] Plex Response: ${response.status} ${JSON.stringify(response.data)}`);
 
-            logger.info(`Added labels [${missingLabels.join(', ')}] to Plex item ${metadata.title}`);
+            logger.info(`Synced labels [${finalLabels.join(', ')}] to Plex item ${metadata.title}`);
         }, 'add plex labels');
 
     } catch (error: any) {
@@ -238,7 +245,6 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
 
         const itemTags = item.tags || [];
         // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
-        // Note: The caller should pass 'globalTags' which might include the 'radarr'/'sonarr' tag
         const allTags = [...new Set([...itemTags, ...globalTags])];
 
         if (allTags.length === 0) return;
