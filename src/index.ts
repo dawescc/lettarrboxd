@@ -28,6 +28,7 @@ interface BaseListConfig {
     };
     takeAmount?: number;
     takeStrategy?: 'oldest' | 'newest';
+    qualityProfile?: string;
 }
 
 function startScheduledMonitoring(): void {
@@ -96,8 +97,15 @@ async function processLists<T extends ScrapedMedia>(
                     const existingTags = existing.tags || [];
                     const newTags = list.tags || [];
                     existing.tags = [...new Set([...existingTags, ...newTags])];
+                    // If the new list has a quality profile, it overrides the existing one (last wins)
+                    if (list.qualityProfile) {
+                        existing.qualityProfile = list.qualityProfile;
+                    }
                 } else {
                     item.tags = [...(list.tags || [])];
+                    if (list.qualityProfile) {
+                        item.qualityProfile = list.qualityProfile;
+                    }
                     allItems.set(item.tmdbId, item);
                 }
             }

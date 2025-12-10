@@ -44,7 +44,7 @@ import {
   deleteSeries,
   syncSeries,
   getSeriesLookup,
-  getQualityProfileId,
+
 } from './sonarr';
 
 describe('sonarr API', () => {
@@ -307,6 +307,50 @@ describe('sonarr API', () => {
         ])
       }));
     });
+
+    it('should use list-specific quality profile override', async () => {
+        const seriesWithOverride = [
+          {
+            id: 1,
+            name: 'Override Series',
+            slug: 'Override Series',
+            tmdbId: '999',
+            qualityProfile: '4K'
+          }
+        ];
+  
+        mockAxiosInstance.get.mockImplementation((url) => {
+          if (url.includes('/qualityprofile')) return Promise.resolve({ 
+              data: [
+                  { id: 2, name: 'HD-1080p' },
+                  { id: 3, name: '4K' }
+              ] 
+          });
+          if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+          if (url.includes('/tag')) return Promise.resolve({ data: [] });
+          if (url === '/api/v3/series') return Promise.resolve({ data: [] });
+          if (url.includes('/series/lookup')) return Promise.resolve({ 
+            data: [{
+              title: 'Override Series',
+              tvdbId: 12345,
+              seasons: [{ seasonNumber: 1 }]
+            }]
+          });
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        });
+  
+        mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, title: 'Override Series' } });
+  
+        await syncSeries(seriesWithOverride);
+  
+        expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+          '/api/v3/series',
+          expect.objectContaining({ 
+              title: 'Override Series',
+              qualityProfileId: 3 // Should use 4K ID
+          })
+        );
+      });
 
     it('should add new series with specific monitored seasons', async () => {
       mockAxiosInstance.get.mockImplementation((url) => {

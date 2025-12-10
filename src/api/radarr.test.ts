@@ -42,7 +42,7 @@ jest.mock('../util/retry', () => ({
 }));
 
 import {
-  getQualityProfileId,
+
   getRootFolder,
   getRootFolderById,
   ensureTagsAreAvailable,
@@ -68,45 +68,7 @@ describe('radarr API', () => {
     mockEnv.REMOVE_MISSING_ITEMS = false;
   });
 
-  describe('getQualityProfileId', () => {
-    it('should return quality profile ID when profile exists', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [
-          { id: 1, name: 'SD' },
-          { id: 2, name: 'HD-1080p' },
-          { id: 3, name: '4K' },
-        ],
-      });
 
-      const result = await getQualityProfileId('HD-1080p');
-
-      expect(result).toBe(2);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/qualityprofile');
-    });
-
-    it('should return null when profile does not exist', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [
-          { id: 1, name: 'SD' },
-          { id: 2, name: 'HD-1080p' },
-        ],
-      });
-
-      const result = await getQualityProfileId('NonExistent');
-
-      expect(result).toBeNull();
-    });
-
-    it('should return null on error', async () => {
-      const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: any) => cb() as any);
-      mockAxiosInstance.get.mockRejectedValue(new Error('Network error'));
-
-      const result = await getQualityProfileId('HD-1080p');
-
-      expect(result).toBeNull();
-      setTimeoutSpy.mockRestore();
-    });
-  });
 
   describe('getRootFolder', () => {
     it('should return first root folder path', async () => {
@@ -417,6 +379,43 @@ describe('radarr API', () => {
       );
     });
 
+    it('should use list-specific quality profile override', async () => {
+      const movieWithOverride = [
+        {
+          id: 1,
+          name: 'Override Movie',
+          slug: '/film/override/',
+          tmdbId: '999',
+          qualityProfile: '4K'
+        }
+      ];
+
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ 
+            data: [
+                { id: 2, name: 'HD-1080p' },
+                { id: 3, name: '4K' }
+            ] 
+        });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [] });
+        if (url === '/api/v3/movie') return Promise.resolve({ data: [] });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, title: 'Override Movie' } });
+
+      await syncMovies(movieWithOverride);
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/api/v3/movie',
+        expect.objectContaining({ 
+            title: 'Override Movie',
+            qualityProfileId: 3 // Should use 4K ID
+        })
+      );
+    });
+
     it('should remove missing movies when enabled', async () => {
       mockEnv.REMOVE_MISSING_ITEMS = true;
       
@@ -453,7 +452,7 @@ describe('radarr API', () => {
       });
 
       await expect(syncMovies(mockMovies)).rejects.toThrow(
-        'Could not get quality profile ID.'
+        /Could not find global quality profile ID/
       );
     });
   });

@@ -23,6 +23,7 @@ const LetterboxdListSchema = z.object({
   activeUntil: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
   takeAmount: z.number().positive().optional(),
   takeStrategy: z.enum(['oldest', 'newest']).optional(),
+  qualityProfile: z.string().optional(),
 });
 
 const SerializdListSchema = z.object({
@@ -32,6 +33,7 @@ const SerializdListSchema = z.object({
   filters: FilterSchema.optional(),
   activeFrom: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
   activeUntil: z.string().regex(/^\d{2}-\d{2}$/, "Format must be MM-DD").optional(),
+  qualityProfile: z.string().optional(),
 });
 
 const ConfigSchema = z.object({

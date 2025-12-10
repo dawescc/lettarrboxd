@@ -50,27 +50,17 @@ interface SonarrLookupResult {
     id?: number;
 }
 
-export async function getQualityProfileId(profileName: string): Promise<number | null> {
+
+
+export async function getAllQualityProfiles(): Promise<any[]> {
     try {
         return await retryOperation(async () => {
-            logger.debug(`Getting quality profile ID for: ${profileName}`);
-
             const response = await axios.get('/api/v3/qualityprofile');
-            const profiles = response.data;
-
-            const profile = profiles.find((p: any) => p.name === profileName);
-            if (profile) {
-                logger.debug(`Found quality profile: ${profileName} (ID: ${profile.id})`);
-                return profile.id;
-            } else {
-                logger.error(`Quality profile not found: ${profileName}`);
-                logger.debug('Available profiles:', profiles.map((p: any) => p.name));
-                return null;
-            }
-        }, 'get quality profile');
+            return response.data;
+        }, 'get all quality profiles');
     } catch (error) {
-        logger.error('Error getting Sonarr quality profiles:', error as any);
-        return null;
+        logger.error('Error getting all quality profiles from Sonarr:', error as any);
+        return [];
     }
 }
 
@@ -257,15 +247,21 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
 export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
     const sonarrConfig = config.sonarr;
     // Fallback to ENV if config absent
-    const qualityProfileName = sonarrConfig?.qualityProfile || env.SONARR_QUALITY_PROFILE;
+    // Fallback to ENV if config absent
+    const globalQualityProfileName = sonarrConfig?.qualityProfile || env.SONARR_QUALITY_PROFILE;
 
-    if (!qualityProfileName) {
-        throw new Error('Sonarr quality profile not configured');
+    if (!globalQualityProfileName) {
+        throw new Error('Sonarr global quality profile not configured');
     }
 
-    const qualityProfileId = await getQualityProfileId(qualityProfileName);
-    if (!qualityProfileId) {
-        throw new Error(`Could not find Sonarr quality profile: ${qualityProfileName}`);
+    // Cache all profiles
+    const allProfiles = await getAllQualityProfiles();
+    const profileMap = new Map<string, number>();
+    allProfiles.forEach((p: any) => profileMap.set(p.name, p.id));
+
+    const globalProfileId = profileMap.get(globalQualityProfileName);
+    if (!globalProfileId) {
+        throw new Error(`Could not find Sonarr global quality profile: ${globalQualityProfileName}`);
     }
 
     const rootFolderConfig = sonarrConfig?.rootFolder || env.SONARR_ROOT_FOLDER_ID;
@@ -357,6 +353,17 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
         // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
         // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
+        // Resolve Quality Profile
+        let qualityProfileId = globalProfileId;
+        if (item.qualityProfile) {
+            const overrideId = profileMap.get(item.qualityProfile);
+            if (overrideId) {
+                qualityProfileId = overrideId;
+            } else {
+                logger.warn(`Quality profile override '${item.qualityProfile}' not found in Sonarr. Using global default.`);
+            }
+        }
+
         const result = await addSeries(item, qualityProfileId, rootFolderPath, finalTagIds, existingTvdbIds, existingSeries);
         if (result) {
             keepTvdbIds.add(result.tvdbId);

@@ -9,6 +9,7 @@ export interface ScrapedMedia {
     tmdbId?: string|null;
     slug: string;
     tags?: string[]; // Custom tags from the source list
+    qualityProfile?: string; // Override global quality profile
 }
 
 export interface LetterboxdMovie extends ScrapedMedia {

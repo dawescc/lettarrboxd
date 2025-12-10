@@ -29,27 +29,17 @@ const axios = Axios.create({
 
 import { retryOperation } from '../util/retry';
 
-export async function getQualityProfileId(profileName: string): Promise<number | null> {
+
+
+export async function getAllQualityProfiles(): Promise<any[]> {
     try {
         return await retryOperation(async () => {
-            logger.debug(`Getting quality profile ID for: ${profileName}`);
-
             const response = await axios.get('/api/v3/qualityprofile');
-            const profiles = response.data;
-
-            const profile = profiles.find((p: any) => p.name === profileName);
-            if (profile) {
-                logger.debug(`Found quality profile: ${profileName} (ID: ${profile.id})`);
-                return profile.id;
-            } else {
-                logger.error(`Quality profile not found: ${profileName}`);
-                logger.debug('Available profiles:', profiles.map((p: any) => p.name));
-                return null;
-            }
-        }, 'get quality profile');
+            return response.data;
+        }, 'get all quality profiles');
     } catch (error) {
-        logger.error('Error getting quality profiles:', error as any);
-        return null;
+        logger.error('Error getting all quality profiles:', error as any);
+        return [];
     }
 }
 
@@ -175,15 +165,21 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
 export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
     const radarrConfig = config.radarr;
     // Fallback to ENV if config absent
-    const qualityProfileName = radarrConfig?.qualityProfile || env.RADARR_QUALITY_PROFILE;
+    // Fallback to ENV if config absent
+    const globalQualityProfileName = radarrConfig?.qualityProfile || env.RADARR_QUALITY_PROFILE;
     
-    if (!qualityProfileName) {
-        throw new Error('Radarr quality profile not configured');
+    if (!globalQualityProfileName) {
+        throw new Error('Radarr global quality profile not configured');
     }
-    const qualityProfileId = await getQualityProfileId(qualityProfileName);
 
-    if (!qualityProfileId) {
-        throw new Error('Could not get quality profile ID.');
+    // Cache all profiles to avoid repeated lookups
+    const allProfiles = await getAllQualityProfiles();
+    const profileMap = new Map<string, number>();
+    allProfiles.forEach((p: any) => profileMap.set(p.name, p.id));
+
+    const globalProfileId = profileMap.get(globalQualityProfileName);
+    if (!globalProfileId) {
+        throw new Error(`Could not find global quality profile ID for: ${globalQualityProfileName}`);
     }
 
     const rootFolderConfig = radarrConfig?.rootFolder || env.RADARR_ROOT_FOLDER_ID;
@@ -239,6 +235,17 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
         
         // Merge system tags + movie tags
         const finalTagIds = [...new Set([...startSystemTagIds, ...movieSpecificTagIds])];
+
+        // Resolve Quality Profile
+        let qualityProfileId = globalProfileId;
+        if (movie.qualityProfile) {
+            const overrideId = profileMap.get(movie.qualityProfile);
+            if (overrideId) {
+                qualityProfileId = overrideId;
+            } else {
+                logger.warn(`Quality profile override '${movie.qualityProfile}' not found in Radarr. Using global default.`);
+            }
+        }
 
         return addMovie(movie, qualityProfileId, rootFolderPath, finalTagIds, env.RADARR_MINIMUM_AVAILABILITY, existingMoviesMap);
     }, { concurrency: 3 });
