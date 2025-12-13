@@ -31,6 +31,10 @@ build/
 ehthumbs.db
 Thumbs.db
 
+# Agents
+.agent/
+.agents/
+
 # Logs
 logs
 *.log
