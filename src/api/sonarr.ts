@@ -1,6 +1,6 @@
 import Axios from 'axios';
 import env from '../util/env';
-import config from '../util/config';
+import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
 import Bluebird from 'bluebird';
@@ -245,6 +245,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
 }
 
 export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
+    const config = loadConfig();
     const sonarrConfig = config.sonarr;
     // Fallback to ENV if config absent
     // Fallback to ENV if config absent

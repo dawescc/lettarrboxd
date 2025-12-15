@@ -1,5 +1,5 @@
 import Axios, { AxiosInstance } from 'axios';
-import config from '../util/config';
+import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
 
@@ -35,6 +35,7 @@ interface PlexMediaContainer {
  * @returns The ratingKey (internal ID) of the item, or null if not found
  */
 export async function findItemByTmdbId(tmdbId: string, title?: string, year?: number, type?: 'movie' | 'show'): Promise<string | null> {
+    const config = loadConfig();
     if (!config.plex) return null;
 
     const { url, token } = config.plex;
@@ -158,6 +159,7 @@ async function searchByTitleAndId(
  */
 export async function addLabels(ratingKey: string, labels: string[], typeHint?: 'movie' | 'show') {
     // Remove 'config' property access since this is a standalone function, use global config
+    const config = loadConfig();
     if (!config.plex) return;
     const { url, token } = config.plex;
 
@@ -236,6 +238,7 @@ import { ScrapedMedia } from '../scraper';
  * @param typeHint 'movie' or 'show' (optional, improves lookup speed)
  */
 export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] = [], typeHint?: 'movie' | 'show') {
+    const config = loadConfig();
     if (!config.plex) return;
 
     logger.info(`Syncing Plex metadata for ${items.length} items (Concurrency: 5)...`);

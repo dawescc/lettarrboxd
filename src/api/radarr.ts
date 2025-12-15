@@ -1,6 +1,6 @@
 import Axios from 'axios';
 import env from '../util/env';
-import config from '../util/config';
+import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
 import Bluebird from 'bluebird';
@@ -163,6 +163,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
 }
 
 export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
+    const config = loadConfig();
     const radarrConfig = config.radarr;
     // Fallback to ENV if config absent
     // Fallback to ENV if config absent

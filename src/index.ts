@@ -2,7 +2,7 @@ require('dotenv').config();
 
 import Bluebird from 'bluebird';
 import env from './util/env';
-import config from './util/config';
+import config, { loadConfig } from './util/config';
 import logger from './util/logger';
 import { isListActive } from './util/schedule';
 import { fetchMoviesFromUrl, ScrapedMedia, LetterboxdMovie, ScrapedSeries } from './scraper';
@@ -146,9 +146,12 @@ async function processLists<T extends ScrapedMedia>(
 }
 
 export async function run() {
+    // Reload config on every run to support dynamic updates (e.g. adding new lists)
+    const currentConfig = loadConfig();
+
     // 1. Process Letterboxd Lists
     await processLists<LetterboxdMovie>(
-        config.letterboxd,
+        currentConfig.letterboxd,
         'letterboxd',
         async (list) => {
             // Letterboxd Fetcher + Filter
@@ -170,12 +173,12 @@ export async function run() {
         },
         syncMovies,
         'movie',
-        config.radarr?.tags || []
+        currentConfig.radarr?.tags || []
     );
 
     // 2. Process Serializd Lists
     await processLists<ScrapedSeries>(
-        config.serializd,
+        currentConfig.serializd,
         'serializd',
         async (list) => {
             // Serializd Fetcher
@@ -184,7 +187,7 @@ export async function run() {
         },
         syncSeries,
         'show',
-        config.sonarr?.tags || []
+        currentConfig.sonarr?.tags || []
     );
   
   logger.info('Sync complete.');
