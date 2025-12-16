@@ -39,8 +39,8 @@ interface PlexMediaContainer {
  * @param tmdbId The TMDB ID to search for
  * @returns The ratingKey (internal ID) of the item, or null if not found
  */
-export async function findItemByTmdbId(tmdbId: string, title?: string, year?: number, type?: 'movie' | 'show'): Promise<string | null> {
-    const config = loadConfig();
+export async function findItemByTmdbId(tmdbId: string, title?: string, year?: number, type?: 'movie' | 'show', config?: any): Promise<string | null> {
+    if (!config) config = loadConfig();
     if (!config.plex) return null;
 
     const { url, token } = config.plex;
@@ -164,8 +164,8 @@ async function searchByTitleAndId(
  * @param managedTags Set of all tags we manage (candidates for removal)
  * @param systemLabel The ownership label (e.g. 'lettarrboxd')
  */
-export async function syncLabels(ratingKey: string, targetLabels: string[], managedTags: Set<string>, systemLabel: string, typeHint?: 'movie' | 'show') {
-    const config = loadConfig();
+export async function syncLabels(ratingKey: string, targetLabels: string[], managedTags: Set<string>, systemLabel: string, typeHint: 'movie' | 'show' | undefined, config?: any) {
+    if (!config) config = loadConfig();
     if (!config.plex) return;
     const { url, token } = config.plex;
 
@@ -287,11 +287,11 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
             // Pass title, year (if available), and type hint for fallback search
             const year = (item as any).publishedYear || (item as any).year;
             
-            const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint);
+            const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
 
             if (ratingKey) {
                 // Atomic update
-                await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint);
+                await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
             }
         } catch (e: any) {
             logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);

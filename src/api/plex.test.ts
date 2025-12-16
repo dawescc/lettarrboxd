@@ -67,7 +67,7 @@ describe('Plex API', () => {
                  }
              });
 
-             const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie');
+             const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie', undefined);
              expect(result).toBe('100');
              expect(mockClient.get).toHaveBeenCalledWith('http://plex:32400/library/all', expect.objectContaining({
                  params: { guid: 'com.plexapp.agents.themoviedb://12345?lang=en' }
@@ -96,7 +96,7 @@ describe('Plex API', () => {
                 }
             });
 
-            const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie');
+            const result = await findItemByTmdbId('12345', 'Test Movie', 2020, 'movie', undefined);
             expect(result).toBe('200');
         });
     });
@@ -121,7 +121,7 @@ describe('Plex API', () => {
             // 2. Put response
             mockClient.put.mockResolvedValueOnce({ status: 200, data: {} });
 
-            await syncLabels('100', ['new-tag'], new Set(), 'letterboxd', 'movie');
+            await syncLabels('100', ['new-tag'], new Set(), 'letterboxd', 'movie', undefined);
 
             // Verify PUT URL
             expect(mockClient.put).toHaveBeenCalledTimes(1);
@@ -146,7 +146,7 @@ describe('Plex API', () => {
                 }
             });
 
-            await syncLabels('100', ['existing-tag'], new Set(), 'letterboxd', 'movie');
+            await syncLabels('100', ['existing-tag'], new Set(), 'letterboxd', 'movie', undefined);
 
             // Expect NO put calls
             expect(mockClient.put).not.toHaveBeenCalled();
