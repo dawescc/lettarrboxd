@@ -63,7 +63,7 @@ async function processLists<T extends ScrapedMedia>(
     lists: BaseListConfig[],
     componentName: string, // 'letterboxd' or 'serializd'
     fetchItemsFn: (list: BaseListConfig) => Promise<T[]>,
-    syncItemsFn: (items: T[]) => Promise<void>,
+    syncItemsFn: (items: T[], managedTags: Set<string>) => Promise<void>,
     plexType: 'movie' | 'show',
     plexGlobalTags: string[]
 ) {
@@ -71,6 +71,13 @@ async function processLists<T extends ScrapedMedia>(
         updateComponentStatus(componentName, 'disabled');
         return;
     }
+
+    // Collect managed tags (safely)
+    // If a list fails to fetch, we MUST NOT include its tags in 'managedTags'.
+    // Furthermore, if a tag is shared between a successful list and a failed list, 
+    // we must treat it as "unsafe to delete" because we don't know the status of items in the failed list.
+    const potentialManagedTags = new Set<string>();
+    const unsafeTags = new Set<string>();
 
     let hasError = false;
     const allItems = new Map<string, T>(); // TMDB ID -> Item
@@ -87,17 +94,21 @@ async function processLists<T extends ScrapedMedia>(
         try {
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
             const items = await fetchItemsFn(list);
+            
+            // On Success: Mark tags as candidates for management
+            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
 
             for (const item of items) {
                 if (!item.tmdbId) continue;
 
-                // Merge Logic (Thread-safe within the Map context since JS is single threaded event loop)
+                // Merge Logic (Thread-safe within the Map context)
                 if (allItems.has(item.tmdbId)) {
                     const existing = allItems.get(item.tmdbId)!;
                     const existingTags = existing.tags || [];
                     const newTags = list.tags || [];
                     existing.tags = [...new Set([...existingTags, ...newTags])];
-                    // If the new list has a quality profile, it overrides the existing one (last wins)
+                    
+                    // Priority: Last list wins for quality profile (simplified logic)
                     if (list.qualityProfile) {
                         existing.qualityProfile = list.qualityProfile;
                     }
@@ -113,8 +124,21 @@ async function processLists<T extends ScrapedMedia>(
         } catch (e: any) {
             logger.error(`Error fetching list ${list.url}:`, e);
             hasError = true;
+            // On Failure: Mark tags as UNSAFE
+            if (list.tags) list.tags.forEach(t => unsafeTags.add(t));
         }
     }, { concurrency: 5 });
+
+    // Calculate final safe-to-manage tags
+    // managedTags = potentialManagedTags - unsafeTags
+    const managedTags = new Set<string>();
+    potentialManagedTags.forEach(t => {
+        if (!unsafeTags.has(t)) {
+            managedTags.add(t);
+        } else {
+            logger.warn(`Tag '${t}' is present in a failed list. It will be preserved on all items to ensure safety.`);
+        }
+    });
 
     const uniqueItems = Array.from(allItems.values());
 
@@ -124,14 +148,18 @@ async function processLists<T extends ScrapedMedia>(
         logger.info(`Total unique items found across all ${componentName} lists: ${uniqueItems.length}`);
         
         try {
-            // Sync to Radarr/Sonarr
-            await syncItemsFn(uniqueItems);
+            // Sync to Radarr/Sonarr (Pass managedTags for cleanup)
+            await syncItemsFn(uniqueItems, managedTags);
             updateComponentStatus(targetComponent, 'ok');
             
             // Sync Plex
             // We pass the component specific default tag (e.g. 'letterboxd') + any global tags from config
             const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? RADARR_DEFAULT_TAG : SONARR_DEFAULT_TAG];
-            await plex.syncPlexTags(uniqueItems, allPlexTags, plexType);
+            
+            // Collect Managed Tags for Plex (Global + List Specific)
+            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
+            
+            await plex.syncPlexTags(uniqueItems, allPlexTags, plexManagedTags, plexType);
         } catch (e: any) {
             updateComponentStatus(targetComponent, 'error', e.message);
             throw e; 
@@ -171,7 +199,7 @@ export async function run() {
             }
             return movies;
         },
-        syncMovies,
+        (items, managedTags) => syncMovies(items, managedTags),
         'movie',
         currentConfig.radarr?.tags || []
     );
@@ -185,7 +213,7 @@ export async function run() {
             const scraper = new SerializdScraper(list.url);
             return await scraper.getSeries();
         },
-        syncSeries,
+        (items, managedTags) => syncSeries(items, managedTags), // Fix signature
         'show',
         currentConfig.sonarr?.tags || []
     );

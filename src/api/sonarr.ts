@@ -244,7 +244,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
+export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<string>): Promise<void> {
     const config = loadConfig();
     const sonarrConfig = config.sonarr;
     // Fallback to ENV if config absent
@@ -287,11 +287,23 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         }
     });
 
-    const allRequiredTags = [...new Set([...systemTagNames, ...seriesTagNames])];
+    const allRequiredTags = [...new Set([...systemTagNames, ...seriesTagNames, ...managedTags])];
 
     // 2. Resolve IDs (Batch operation)
     logger.info(`Resolving ${allRequiredTags.length} tags for Sonarr...`);
     const tagMap = await ensureTagsAreAvailable(allRequiredTags);
+
+    // Map managed tags (strings) to IDs for cleaning
+    const managedTagIds = new Set<number>();
+    managedTags.forEach(t => {
+        const id = tagMap.get(t);
+        if (id) managedTagIds.add(id);
+    });
+    // Add system tags to managed list
+    systemTagNames.forEach(t => {
+        const id = tagMap.get(t);
+        if (id) managedTagIds.add(id);
+    });
 
     const startSystemTagIds = systemTagNames
         .map(name => tagMap.get(name))
@@ -334,21 +346,44 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         // Merge system tags + series tags
         const finalTagIds = [...new Set([...startSystemTagIds, ...seriesSpecificTagIds])];
 
+        const existingItem = existingSeries.find((s: any) => s.tvdbId === tmdbToTvdbMap.get(tmdbId) || s.tmdbId === tmdbId);
+
+        if (existingItem) {
+             const tvdbId = existingItem.tvdbId;
+             keepTvdbIds.add(tvdbId);
+
+             // Clone string item so we can mutate it locally between updates
+             let currentItemState = { ...existingItem };
+
+             // OWNERSHIP CHECK
+             if (serializdTagId && currentItemState.tags && currentItemState.tags.includes(serializdTagId)) {
+                 // Smart Tag Sync
+                 const currentTags = new Set<number>(currentItemState.tags || []);
+                 const preservedTags = [...currentTags].filter(id => !managedTagIds.has(id));
+                 const nextTags = [...new Set([...preservedTags, ...finalTagIds])];
+
+                 if (nextTags.length !== currentTags.size || !nextTags.every(t => currentTags.has(t))) {
+                     // Perform update
+                     await updateSeries(currentItemState, nextTags);
+                     
+                     // Update local state so next operation uses new tags
+                     currentItemState.tags = nextTags;
+                 }
+             }
+
+             // Check seasons
+             if (item.seasons && item.seasons.length > 0) {
+                 await updateSeriesSeasonsRaw(currentItemState, item.seasons);
+             }
+             
+             logger.debug(`Series ${item.name} already exists in Sonarr.`);
+             return { tvdbId, wasAdded: false };
+        }
+
         // Optimization: If we already know the TVDB ID from our local map, use it
         if (tmdbToTvdbMap.has(tmdbId)) {
-            const tvdbId = tmdbToTvdbMap.get(tmdbId)!;
-            keepTvdbIds.add(tvdbId);
-            
-            // Check if we need to update seasons
-            if (item.seasons && item.seasons.length > 0) {
-                const existingItem = existingSeries.find((s: any) => s.tvdbId === tvdbId);
-                if (existingItem) {
-                    await updateSeriesSeasonsRaw(existingItem, item.seasons);
-                }
-            }
-            
-            logger.debug(`Series ${item.name} already exists in Sonarr (cached match), checked/updated seasons.`);
-            return { tvdbId, wasAdded: false };
+            // Already handled in block above if found in existingSeries, but just in case of race condition logic
+            // Skipping redundant logic here as existingItem check covers it
         }
 
         // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
@@ -394,6 +429,25 @@ export async function syncSeries(seriesList: ScrapedSeries[]): Promise<void> {
         } else {
             logger.info('No series to remove.');
         }
+    }
+}
+
+export async function updateSeries(existingSeries: any, newTags: number[]): Promise<void> {
+    try {
+        if (env.DRY_RUN) {
+            logger.info(`[DRY RUN] Would update tags for series: ${existingSeries.title} -> [${newTags.join(', ')}]`);
+            return;
+        }
+
+        logger.info(`Updating tags for series: ${existingSeries.title}`);
+        const payload = {
+            ...existingSeries,
+            tags: newTags
+        };
+
+        await axios.put(`/api/v3/series/${existingSeries.id}`, payload);
+    } catch (e: any) {
+        logger.error(`Error updating series ${existingSeries.title}:`, e as any);
     }
 }
 

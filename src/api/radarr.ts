@@ -162,7 +162,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
+export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<string>): Promise<void> {
     const config = loadConfig();
     const radarrConfig = config.radarr;
     // Fallback to ENV if config absent
@@ -205,11 +205,23 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
         }
     });
 
-    const allRequiredTags = [...new Set([...systemTagNames, ...movieTagNames])];
+    const allRequiredTags = [...new Set([...systemTagNames, ...movieTagNames, ...managedTags])];
 
     // 2. Resolve IDs (Batch operation)
     logger.info(`Resolving ${allRequiredTags.length} tags...`);
     const tagMap = await ensureTagsAreAvailable(allRequiredTags);
+
+    // Map managed tags (strings) to IDs for cleaning
+    const managedTagIds = new Set<number>();
+    managedTags.forEach(t => {
+        const id = tagMap.get(t);
+        if (id) managedTagIds.add(id);
+    });
+    // Add system tags to managed list so we can clean them if needed (though unlikely we'd remove system tags unless config changes)
+    systemTagNames.forEach(t => {
+        const id = tagMap.get(t);
+        if (id) managedTagIds.add(id);
+    });
 
     const startSystemTagIds = systemTagNames
         .map(name => tagMap.get(name))
@@ -226,9 +238,9 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
     
     logger.info(`Found ${existingMovies.length} existing movies in Radarr.`);
 
-    // 2. Add new movies
+    // 2. Add/Update movies
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    const results = await Bluebird.map(movies, movie => {
+    const results = await Bluebird.map(movies, async (movie) => {
         // Calculate tags for this specific movie
         const movieSpecificTagIds = (movie.tags || [])
             .map(t => tagMap.get(t))
@@ -248,11 +260,42 @@ export async function syncMovies(movies: LetterboxdMovie[]): Promise<void> {
             }
         }
 
+        const tmdbId = parseInt(movie.tmdbId || '0');
+        if (tmdbId === 0) return;
+
+        // Check if exists
+        if (existingMoviesMap.has(tmdbId)) {
+             const existingMovie = existingMoviesMap.get(tmdbId)!;
+             
+             // OWNERSHIP CHECK: Only touch if it has the 'letterboxd' tag
+             if (letterboxdTagId && existingMovie.tags && existingMovie.tags.includes(letterboxdTagId)) {
+                 // Smart Tag Sync
+                 const currentTags = new Set<number>(existingMovie.tags || []);
+                 
+                 // 1. Remove ANY managed tags that are currently on the movie
+                 // (We are resetting the managed state)
+                 const preservedTags = [...currentTags].filter(id => !managedTagIds.has(id));
+                 
+                 // 2. Add back the ones that SHOULD be there
+                 const nextTags = [...new Set([...preservedTags, ...finalTagIds])];
+                 
+                 // 3. Check for change
+                 if (nextTags.length !== currentTags.size || !nextTags.every(t => currentTags.has(t))) {
+                     await updateMovie(existingMovie, nextTags);
+                 } else {
+                     logger.debug(`Movie ${movie.name} tags already up to date.`);
+                 }
+             } else {
+                 logger.debug(`Skipping update for ${movie.name}: Missing ownership tag.`);
+             }
+             return;
+        }
+
         return addMovie(movie, qualityProfileId, rootFolderPath, finalTagIds, env.RADARR_MINIMUM_AVAILABILITY, existingMoviesMap);
     }, { concurrency: 3 });
 
     const addedCount = results.filter(r => r !== undefined).length;
-    logger.info(`Finished processing movies. Added ${addedCount} new movies.`);
+    logger.info(`Finished processing movies.`);
 
     // 3. Remove missing movies (if enabled)
     if (env.REMOVE_MISSING_ITEMS && letterboxdTagId) {
@@ -327,5 +370,24 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
             return;
         }
         logger.error(`Error adding movie ${movie.name} (TMDB: ${movie.tmdbId}):`, e as any);
+    }
+}
+
+export async function updateMovie(existingMovie: any, newTags: number[]): Promise<void> {
+    try {
+        if (env.DRY_RUN) {
+            logger.info(`[DRY RUN] Would update tags for movie: ${existingMovie.title} -> [${newTags.join(', ')}]`);
+            return;
+        }
+
+        logger.info(`Updating tags for movie: ${existingMovie.title}`);
+        const payload = {
+            ...existingMovie,
+            tags: newTags
+        };
+
+        await axios.put(`/api/v3/movie/${existingMovie.id}`, payload);
+    } catch (e: any) {
+        logger.error(`Error updating movie ${existingMovie.title}:`, e as any);
     }
 }

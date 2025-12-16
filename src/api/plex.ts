@@ -1,7 +1,11 @@
+
 import Axios, { AxiosInstance } from 'axios';
 import { loadConfig } from '../util/config';
+import Bluebird from 'bluebird';
+import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
+import env from '../util/env';
 
 let plexClient: AxiosInstance | null = null;
 
@@ -150,15 +154,16 @@ async function searchByTitleAndId(
 }
 
 /**
- * Adds multiple labels to an item in a single atomic update.
- * Merges with existing labels to prevent overwriting.
+ * Syncs labels for an item.
+ * Merges with existing labels to prevent overwriting USER labels, 
+ * but removes managed labels that are no longer applicable.
  * 
  * @param ratingKey The internal Plex ID of the item
- * @param labels Array of labels to add
- * @param typeHint 'movie' or 'show' (optional, but recommended for API compliance)
+ * @param targetLabels Array of labels that should be present from our sync
+ * @param managedTags Set of all tags we manage (candidates for removal)
+ * @param systemLabel The ownership label (e.g. 'lettarrboxd')
  */
-export async function addLabels(ratingKey: string, labels: string[], typeHint?: 'movie' | 'show') {
-    // Remove 'config' property access since this is a standalone function, use global config
+export async function syncLabels(ratingKey: string, targetLabels: string[], managedTags: Set<string>, systemLabel: string, typeHint?: 'movie' | 'show') {
     const config = loadConfig();
     if (!config.plex) return;
     const { url, token } = config.plex;
@@ -179,29 +184,55 @@ export async function addLabels(ratingKey: string, labels: string[], typeHint?: 
 
             const existingLabels = (metadata.Label || []).map((l: { tag: string }) => l.tag);
             
-            logger.info(`[DEBUG] Item ${ratingKey} Existing Labels: ${JSON.stringify(existingLabels)}`);
-
-            // 2. Merge existing + new labels (deduplicated case-insensitively)
-            const normalizedExisting = new Map(existingLabels.map((l: string) => [l.toLowerCase(), l]));
+            // OWNERSHIP CHECK
+            // We only touch items that have our system label (or if we are about to ADD the system label for the first time, effectively claimed)
+            // Wait, if we are adding it for the first time, existingLabels won't have it.
+            // But if it's a NEW item, managedTags removal is irrelevant (existing is empty or user-only).
+            // Logic:
+            // - If existing contains systemLabel: Full Sync (Add New, Remove Stale Managed)
+            // - If existing does NOT contain systemLabel: Add Only (Don't remove anything, just append targetLabels including systemLabel)
             
-            // Add new labels if their lower-case version doesn't exist
-            labels.forEach(l => {
-                if (!normalizedExisting.has(l.toLowerCase())) {
-                    normalizedExisting.set(l.toLowerCase(), l);
-                }
-            });
+            const hasOwnership = existingLabels.some(l => l.toLowerCase() === systemLabel.toLowerCase());
+            
+            // Normalize for case-insensitive comparison
+            const normalizedExisting = new Map(existingLabels.map(l => [l.toLowerCase(), l]));
+            const normalizedManaged = new Set([...managedTags].map(t => t.toLowerCase()));
+            
+            let finalLabelsArg: string[] = [];
 
-            const finalLabels = Array.from(normalizedExisting.values());
+            if (hasOwnership) {
+                // Smart Sync:
+                // 1. Keep User Tags (Existing - Managed)
+                const userTags = existingLabels.filter(l => !normalizedManaged.has(l.toLowerCase()));
+                
+                // 2. Add Target Tags
+                // (Target tags includes system label)
+                finalLabelsArg = [...new Set([...userTags, ...targetLabels])];
+            } else {
+                // Additive Only (First time claiming or user item matching our content)
+                // Just merge everything
+                finalLabelsArg = [...new Set([...existingLabels, ...targetLabels])];
+            }
 
             // Verify if update is needed
-            if (finalLabels.length === existingLabels.length && 
-                existingLabels.every((l: string) => normalizedExisting.has(l.toLowerCase()))) {
-                logger.info(`[DEBUG] Plex item ${ratingKey} tags are already in sync. Skipping update.`);
-                return;
+            // Sort both for comparison? Or Set logic.
+            const finalSet = new Set(finalLabelsArg.map(l => l.toLowerCase()));
+            const existingSet = new Set(existingLabels.map(l => l.toLowerCase()));
+            
+            if (finalSet.size === existingSet.size && [...finalSet].every(l => existingSet.has(l))) {
+                 logger.debug(`[DEBUG] Plex item ${metadata.title} labels already up to date.`);
+                 return;
             }
             
-            // Construct query string for Plex API (requires literal brackets for array items)
-            const queryParts = finalLabels.map((l: string, i: number) => {
+            if (env.DRY_RUN) {
+                logger.info(`[DRY RUN] Would update Plex labels for ${metadata.title}: [${existingLabels.join(', ')}] -> [${finalLabelsArg.join(', ')}]`);
+                return;
+            }
+
+            logger.info(`Updating Plex labels for ${metadata.title}: [${existingLabels.join(', ')}] -> [${finalLabelsArg.join(', ')}]`);
+
+            // Construct query string for Plex API
+            const queryParts = finalLabelsArg.map((l: string, i: number) => {
                 return `label[${i}].tag.tag=${encodeURIComponent(l)}`;
             });
             
@@ -211,37 +242,48 @@ export async function addLabels(ratingKey: string, labels: string[], typeHint?: 
             const queryString = queryParts.join('&');
             const fullUrl = `${url}/library/metadata/${ratingKey}?${queryString}`;
             
-            logger.info(`[DEBUG] PUT URL (Batch): ${fullUrl}`);
-
-            const response = await getPlexClient().put(fullUrl, null, {
+            await getPlexClient().put(fullUrl, null, {
                 headers: { 'X-Plex-Token': token, 'Accept': 'application/json' }
             });
-            
-            logger.info(`[DEBUG] Plex Response: ${response.status} ${JSON.stringify(response.data)}`);
 
-            logger.info(`Synced labels [${finalLabels.join(', ')}] to Plex item ${metadata.title}`);
-        }, 'add plex labels');
+        }, 'sync plex labels');
 
     } catch (error: any) {
-        logger.error(`Error adding labels to Plex item ${ratingKey}:`, error.message);
+        logger.error(`Error syncing labels to Plex item ${ratingKey}:`, error.message);
     }
 }
-
-import Bluebird from 'bluebird';
-import { ScrapedMedia } from '../scraper';
 
 /**
  * Syncs tags for a batch of items in parallel.
  * 
  * @param items List of scraped items (movies or series)
  * @param globalTags Tags to apply to every item (e.g. ['letterboxd', 'radarr'])
+ * @param managedTags All tags managed by the application (candidates for removal)
  * @param typeHint 'movie' or 'show' (optional, improves lookup speed)
  */
-export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] = [], typeHint?: 'movie' | 'show') {
+export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] = [], managedTags: Set<string>, typeHint?: 'movie' | 'show') {
     const config = loadConfig();
     if (!config.plex) return;
 
     logger.info(`Syncing Plex metadata for ${items.length} items (Concurrency: 5)...`);
+    
+    // Determine system label for ownership check
+    // If working on Movies -> letterboxd (RADARR_DEFAULT_TAG) is likely the owner tag
+    // If working on Shows -> serializd (SONARR_DEFAULT_TAG)
+    // We can infer this from context or pass it in. globalTags usually contains it.
+    // For safety, let's assume the FIRST global tag is the system owner, or explicit check.
+    // Actually, in `index.ts` we pass `allPlexTags` where the LAST one is the component default tag.
+    // Let's rely on checking for 'letterboxd' or 'serializd' explicitly? 
+    // Or better: The `systemLabel` is the one defining ownership. In index.ts:
+    // const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? RADARR_DEFAULT_TAG : SONARR_DEFAULT_TAG];
+    // So the system label is indeed in globalTags. However, `managedTags` contains EVERYTHING. 
+    
+    // Let's assume the 'system ownership' label is indeed the default tag (letterboxd/serializd).
+    // We can find it by checking if it's 'letterboxd' or 'serializd'.
+    // Or we update the signature to accept `systemOwnerLabel`.
+    // Let's assume 'letterboxd' for movies and 'serializd' for shows based on typeHint.
+    
+    const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; // Hardcoded but aligns with our constants
 
     await Bluebird.map(items, async (item) => {
         if (!item.tmdbId) return;
@@ -254,14 +296,13 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
 
         try {
             // Pass title, year (if available), and type hint for fallback search
-            // We need to cast to any to safely access optional properties that might exist on LetterboxdMovie
             const year = (item as any).publishedYear || (item as any).year;
             
             const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint);
 
             if (ratingKey) {
                 // Atomic update
-                await addLabels(ratingKey, allTags, typeHint);
+                await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint);
             }
         } catch (e: any) {
             logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
