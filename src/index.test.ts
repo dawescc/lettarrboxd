@@ -13,16 +13,16 @@ jest.mock('./util/env', () => ({
   RADARR_TAGS: 'env_tag'
 }));
 
-jest.mock('./util/config', () => ({
-  default: {
-    letterboxd: [],
-    serializd: [],
-    radarr: undefined,
-    sonarr: undefined
-  }
-}));
+jest.mock('./util/config', () => {
+  const mockFn = jest.fn();
+  return {
+    __esModule: true,
+    default: {},
+    loadConfig: mockFn
+  };
+});
 
-import config from './util/config';
+import { loadConfig } from './util/config';
 
 jest.mock('./util/logger', () => ({
   debug: jest.fn(),
@@ -46,9 +46,13 @@ describe('main application logic', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    // Reset config mock state if needed
-    config.letterboxd = [{ url: 'https://list-a', tags: ['tag-a'], filters: undefined }];
-    config.serializd = [];
+    // Default mock config
+    (loadConfig as jest.Mock).mockReturnValue({
+        letterboxd: [{ url: 'https://list-a', tags: ['tag-a'], filters: undefined }],
+        serializd: [],
+        radarr: {},
+        sonarr: {}
+    });
   });
 
   afterEach(() => {
@@ -58,10 +62,15 @@ describe('main application logic', () => {
   describe('Multiple Lists & Tag Merging', () => {
     it('should aggregate movies from multiple lists and merge tags', async () => {
       // Setup Config with 2 lists
-      config.letterboxd = [
-        { url: 'https://list-a', tags: ['horror'], filters: undefined },
-        { url: 'https://list-b', tags: ['watchlist'], filters: undefined }
-      ];
+      (loadConfig as jest.Mock).mockReturnValue({
+          letterboxd: [
+            { url: 'https://list-a', tags: ['horror'], filters: undefined },
+            { url: 'https://list-b', tags: ['watchlist'], filters: undefined }
+          ],
+          serializd: [],
+          radarr: {},
+          sonarr: {}
+      });
 
       // Mock Scraper Responses
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockImplementation(async (url) => {
@@ -106,13 +115,18 @@ describe('main application logic', () => {
 
   describe('Filtering', () => {
     it('should filter movies by minRating', async () => {
-      config.letterboxd = [
-        { 
-          url: 'https://rated-list', 
-          tags: [], 
-          filters: { minRating: 7.0 } as any 
-        }
-      ];
+      (loadConfig as jest.Mock).mockReturnValue({
+          letterboxd: [
+            { 
+              url: 'https://rated-list', 
+              tags: [], 
+              filters: { minRating: 7.0 } as any 
+            }
+          ],
+          serializd: [],
+          radarr: {},
+          sonarr: {}
+      });
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
         { tmdbId: '1', name: 'Good Movie', rating: 8.0 },
@@ -131,13 +145,18 @@ describe('main application logic', () => {
     });
 
     it('should filter movies by year range', async () => {
-      config.letterboxd = [
-        { 
-          url: 'https://year-list', 
-          tags: [], 
-          filters: { minYear: 2000, maxYear: 2010 } as any 
-        }
-      ];
+      (loadConfig as jest.Mock).mockReturnValue({
+          letterboxd: [
+            { 
+              url: 'https://year-list', 
+              tags: [], 
+              filters: { minYear: 2000, maxYear: 2010 } as any 
+            }
+          ],
+          serializd: [],
+          radarr: {},
+          sonarr: {}
+      });
 
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
         { tmdbId: '1', name: '90s Movie', publishedYear: 1999 },

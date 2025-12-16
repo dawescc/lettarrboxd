@@ -31,6 +31,7 @@ const axios = Axios.create({
 });
 
 import { retryOperation } from '../util/retry';
+import { calculateNextTagIds } from '../util/tagLogic';
 
 interface SonarrSeason {
     seasonNumber: number;
@@ -358,11 +359,10 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
              // OWNERSHIP CHECK
              if (serializdTagId && currentItemState.tags && currentItemState.tags.includes(serializdTagId)) {
                  // Smart Tag Sync
-                 const currentTags = new Set<number>(currentItemState.tags || []);
-                 const preservedTags = [...currentTags].filter(id => !managedTagIds.has(id));
-                 const nextTags = [...new Set([...preservedTags, ...finalTagIds])];
+                 const currentTags = currentItemState.tags || [];
+                 const nextTags = calculateNextTagIds(currentTags, managedTagIds, finalTagIds);
 
-                 if (nextTags.length !== currentTags.size || !nextTags.every(t => currentTags.has(t))) {
+                 if (nextTags.length !== currentTags.length || !nextTags.every(t => currentTags.includes(t))) {
                      // Perform update
                      await updateSeries(currentItemState, nextTags);
                      

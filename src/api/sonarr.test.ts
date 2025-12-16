@@ -162,7 +162,7 @@ describe('sonarr API', () => {
       },
     ];
 
-    it('should add series successfully', async () => {
+      it('should add series successfully', async () => {
       mockAxiosInstance.get.mockImplementation((url) => {
         if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
         if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
@@ -182,7 +182,7 @@ describe('sonarr API', () => {
         data: { id: 1, title: 'Barry' },
       });
 
-      await syncSeries(mockSeries);
+      await syncSeries(mockSeries, new Set());
 
       expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/series', expect.objectContaining({
         title: 'Barry',
@@ -201,7 +201,7 @@ describe('sonarr API', () => {
         return Promise.reject(new Error(`Unexpected URL: ${url}`));
       });
 
-      await syncSeries(mockSeries);
+      await syncSeries(mockSeries, new Set());
 
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
@@ -227,7 +227,7 @@ describe('sonarr API', () => {
       mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, label: 'serializd' } });
       mockAxiosInstance.delete.mockResolvedValue({});
 
-      await syncSeries(mockSeries);
+      await syncSeries(mockSeries, new Set());
 
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/series/101', expect.any(Object));
       expect(mockAxiosInstance.delete).not.toHaveBeenCalledWith('/api/v3/series/102', expect.any(Object));
@@ -259,7 +259,7 @@ describe('sonarr API', () => {
         seasons: [1] // Target Season 1
       }];
 
-      await syncSeries(seriesWithSeasons);
+      await syncSeries(seriesWithSeasons, new Set());
 
       expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/series/100', expect.objectContaining({
         id: 100,
@@ -297,7 +297,7 @@ describe('sonarr API', () => {
         seasons: [2] // Now ONLY monitor Season 2 (Season 1 should become unmonitored)
       }];
 
-      await syncSeries(seriesWithSeasons);
+      await syncSeries(seriesWithSeasons, new Set());
 
       expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/series/100', expect.objectContaining({
         id: 100,
@@ -341,7 +341,7 @@ describe('sonarr API', () => {
   
         mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, title: 'Override Series' } });
   
-        await syncSeries(seriesWithOverride);
+        await syncSeries(seriesWithOverride, new Set());
   
         expect(mockAxiosInstance.post).toHaveBeenCalledWith(
           '/api/v3/series',
@@ -375,7 +375,7 @@ describe('sonarr API', () => {
         seasons: [2] // Only monitor Season 2
       }];
 
-      await syncSeries(seriesWithSeasons);
+      await syncSeries(seriesWithSeasons, new Set());
 
       expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/series', expect.objectContaining({
         title: 'Barry',

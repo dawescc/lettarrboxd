@@ -16,6 +16,14 @@ dist
 build
 *.tsbuildinfo
 
+# Tests
+# Tests
+**/*.test.ts
+**/*.itest.ts
+**/*.spec.ts
+jest.config.js
+jest.setup.js
+
 # IDE files
 .vscode
 .idea

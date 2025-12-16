@@ -1,10 +1,17 @@
-import { findItemByTmdbId, addLabels } from './plex';
+import { findItemByTmdbId, syncLabels } from './plex';
 import Axios from 'axios';
 import config from '../util/config';
 
 // Robust mocking: Auto-mock the module, then configure the mock instance
 jest.mock('axios');
-jest.mock('../util/config');
+jest.mock('../util/config', () => {
+    const mock = { plex: undefined };
+    return {
+        __esModule: true,
+        default: mock,
+        loadConfig: () => mock
+    };
+});
 jest.mock('../util/logger', () => ({
     __esModule: true,
     default: {
@@ -72,7 +79,7 @@ describe('Plex API', () => {
             mockClient.get.mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
             // 2. Modern Movie fail
             mockClient.get.mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
-            
+
             // 3. Title Search success
             mockClient.get.mockResolvedValueOnce({
                 data: {
@@ -94,7 +101,7 @@ describe('Plex API', () => {
         });
     });
 
-    describe('addLabels', () => {
+    describe('syncLabels', () => {
         it('should add new labels with atomic batch update', async () => {
             // 1. Get existing labels (mock)
             mockClient.get.mockResolvedValueOnce({
@@ -114,7 +121,7 @@ describe('Plex API', () => {
             // 2. Put response
             mockClient.put.mockResolvedValueOnce({ status: 200, data: {} });
 
-            await addLabels('100', ['new-tag'], 'movie');
+            await syncLabels('100', ['new-tag'], new Set(), 'letterboxd', 'movie');
 
             // Verify PUT URL
             expect(mockClient.put).toHaveBeenCalledTimes(1);
@@ -139,7 +146,7 @@ describe('Plex API', () => {
                 }
             });
 
-            await addLabels('100', ['existing-tag'], 'movie');
+            await syncLabels('100', ['existing-tag'], new Set(), 'letterboxd', 'movie');
 
             // Expect NO put calls
             expect(mockClient.put).not.toHaveBeenCalled();

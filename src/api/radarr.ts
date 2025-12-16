@@ -28,6 +28,7 @@ const axios = Axios.create({
 });
 
 import { retryOperation } from '../util/retry';
+import { calculateNextTagIds } from '../util/tagLogic';
 
 
 
@@ -270,17 +271,12 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
              // OWNERSHIP CHECK: Only touch if it has the 'letterboxd' tag
              if (letterboxdTagId && existingMovie.tags && existingMovie.tags.includes(letterboxdTagId)) {
                  // Smart Tag Sync
-                 const currentTags = new Set<number>(existingMovie.tags || []);
-                 
-                 // 1. Remove ANY managed tags that are currently on the movie
-                 // (We are resetting the managed state)
-                 const preservedTags = [...currentTags].filter(id => !managedTagIds.has(id));
-                 
-                 // 2. Add back the ones that SHOULD be there
-                 const nextTags = [...new Set([...preservedTags, ...finalTagIds])];
-                 
+                 const currentTags = existingMovie.tags || [];
+                 const nextTags = calculateNextTagIds(currentTags, managedTagIds, finalTagIds);
+
                  // 3. Check for change
-                 if (nextTags.length !== currentTags.size || !nextTags.every(t => currentTags.has(t))) {
+                 const currentSet = new Set(currentTags);
+                 if (nextTags.length !== currentSet.size || !nextTags.every(t => currentSet.has(t))) {
                      await updateMovie(existingMovie, nextTags);
                  } else {
                      logger.debug(`Movie ${movie.name} tags already up to date.`);

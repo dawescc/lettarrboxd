@@ -337,7 +337,7 @@ describe('radarr API', () => {
         return Promise.resolve({ data: {} });
       });
 
-      await syncMovies(mockMovies);
+      await syncMovies(mockMovies, new Set());
 
       expect(mockAxiosInstance.post).toHaveBeenCalledWith(
         '/api/v3/movie',
@@ -366,7 +366,7 @@ describe('radarr API', () => {
         return Promise.resolve({ data: {} });
       });
 
-      await syncMovies(mockMovies);
+      await syncMovies(mockMovies, new Set());
 
       // Should only add Movie 2
       expect(mockAxiosInstance.post).toHaveBeenCalledWith(
@@ -405,7 +405,7 @@ describe('radarr API', () => {
 
       mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, title: 'Override Movie' } });
 
-      await syncMovies(movieWithOverride);
+      await syncMovies(movieWithOverride, new Set());
 
       expect(mockAxiosInstance.post).toHaveBeenCalledWith(
         '/api/v3/movie',
@@ -438,7 +438,7 @@ describe('radarr API', () => {
       mockAxiosInstance.post.mockResolvedValue({ data: { id: 1, label: 'letterboxd' } });
       mockAxiosInstance.delete.mockResolvedValue({});
 
-      await syncMovies(moviesInWatchlist);
+      await syncMovies(moviesInWatchlist, new Set());
 
       // Should delete Movie 2
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/movie/101', expect.any(Object));
@@ -451,7 +451,7 @@ describe('radarr API', () => {
         data: [],
       });
 
-      await expect(syncMovies(mockMovies)).rejects.toThrow(
+      await expect(syncMovies(mockMovies, new Set())).rejects.toThrow(
         /Could not find global quality profile ID/
       );
     });

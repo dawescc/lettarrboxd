@@ -5,6 +5,7 @@ import Bluebird from 'bluebird';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
+import { calculateNextTags } from '../util/tagLogic';
 import env from '../util/env';
 
 let plexClient: AxiosInstance | null = null;
@@ -195,27 +196,15 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
             const hasOwnership = existingLabels.some(l => l.toLowerCase() === systemLabel.toLowerCase());
             
             // Normalize for case-insensitive comparison
-            const normalizedExisting = new Map(existingLabels.map(l => [l.toLowerCase(), l]));
-            const normalizedManaged = new Set([...managedTags].map(t => t.toLowerCase()));
+            // This is largely handled by calculateNextTags(..., true) now, 
+            // but we still want to ensure deduplication of the final result handles case correctly if needed.
+            // Our helper returns unique strings, but let's trust it.
             
-            let finalLabelsArg: string[] = [];
-
-            if (hasOwnership) {
-                // Smart Sync:
-                // 1. Keep User Tags (Existing - Managed)
-                const userTags = existingLabels.filter(l => !normalizedManaged.has(l.toLowerCase()));
-                
-                // 2. Add Target Tags
-                // (Target tags includes system label)
-                finalLabelsArg = [...new Set([...userTags, ...targetLabels])];
-            } else {
-                // Additive Only (First time claiming or user item matching our content)
-                // Just merge everything
-                finalLabelsArg = [...new Set([...existingLabels, ...targetLabels])];
-            }
+            const finalLabelsArg = calculateNextTags(existingLabels, managedTags, targetLabels, true);
 
             // Verify if update is needed
             // Sort both for comparison? Or Set logic.
+            // For check, we want case-insensitive comparison of contents.
             const finalSet = new Set(finalLabelsArg.map(l => l.toLowerCase()));
             const existingSet = new Set(existingLabels.map(l => l.toLowerCase()));
             
