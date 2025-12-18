@@ -2,6 +2,7 @@
 const mockAxiosInstance = {
   get: jest.fn(),
   post: jest.fn(),
+  put: jest.fn(),
   delete: jest.fn(),
 };
 
@@ -33,6 +34,7 @@ const mockEnv = {
   DRY_RUN: false,
   RADARR_ROOT_FOLDER_ID: undefined as string | undefined,
   REMOVE_MISSING_ITEMS: false,
+  OVERRIDE_TAGS: false,
 };
 
 jest.mock('../util/env', () => mockEnv);
@@ -455,5 +457,49 @@ describe('radarr API', () => {
         /Could not find global quality profile ID/
       );
     });
+    it('should update existing movie tags if OVERRIDE_TAGS is enabled, even without ownership tag', async () => {
+      mockEnv.OVERRIDE_TAGS = true;
+
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'letterboxd' }] }); // Tag ID 1 exists
+        if (url === '/api/v3/movie') return Promise.resolve({
+          data: [{ id: 100, title: 'Unmanaged Movie', tmdbId: 123, tags: [] }] // No tags
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      await syncMovies([mockMovies[0]], new Set()); // Sync "Movie 1" (TMDB 123)
+
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith(
+        '/api/v3/movie/100',
+        expect.objectContaining({
+          id: 100,
+          tags: expect.arrayContaining([1]) // Should now have tag 1
+        })
+      );
+    });
+
+    it('should NOT update existing movie tags if OVERRIDE_TAGS is disabled and ownership tag is missing', async () => {
+      mockEnv.OVERRIDE_TAGS = false;
+
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'letterboxd' }] });
+        if (url === '/api/v3/movie') return Promise.resolve({
+          data: [{ id: 100, title: 'Unmanaged Movie', tmdbId: 123, tags: [] }] // No tags
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      await syncMovies([mockMovies[0]], new Set());
+
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
   });
 });
+

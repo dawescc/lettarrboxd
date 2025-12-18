@@ -357,7 +357,7 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
              let currentItemState = { ...existingItem };
 
              // OWNERSHIP CHECK
-             if (serializdTagId && currentItemState.tags && currentItemState.tags.includes(serializdTagId)) {
+             if ((serializdTagId && currentItemState.tags && currentItemState.tags.includes(serializdTagId)) || env.OVERRIDE_TAGS) {
                  // Smart Tag Sync
                  const currentTags = currentItemState.tags || [];
                  const nextTags = calculateNextTagIds(currentTags, managedTagIds, finalTagIds);

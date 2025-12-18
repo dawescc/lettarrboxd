@@ -29,6 +29,7 @@ const envSchema = z.object({
   PLEX_URL: z.string().url().optional(),
   PLEX_TOKEN: z.string().optional(),
   PLEX_TAGS: z.string().optional(),
+  OVERRIDE_TAGS: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
 }).refine(data => {
   // Validate Letterboxd/Radarr pairing
   if (data.LETTERBOXD_URL) {

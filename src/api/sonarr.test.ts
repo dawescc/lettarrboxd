@@ -32,6 +32,7 @@ jest.mock('../util/env', () => ({
   SONARR_SEASON_MONITORING: 'all',
   DRY_RUN: false,
   REMOVE_MISSING_ITEMS: false,
+  OVERRIDE_TAGS: false,
 }));
 
 jest.mock('../util/retry', () => ({
@@ -385,5 +386,51 @@ describe('sonarr API', () => {
         ])
       }));
     });
+
+    it('should update existing series tags if OVERRIDE_TAGS is enabled, even without ownership tag', async () => {
+        const env = require('../util/env');
+        env.OVERRIDE_TAGS = true;
+  
+        mockAxiosInstance.get.mockImplementation((url) => {
+          if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+          if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+          if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+          if (url === '/api/v3/series') return Promise.resolve({ 
+            data: [{ id: 100, title: 'Barry', tvdbId: 12345, tmdbId: 73107, tags: [] }] // No tags
+          });
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        });
+  
+        mockAxiosInstance.put.mockResolvedValue({});
+  
+        await syncSeries(mockSeries, new Set());
+  
+        expect(mockAxiosInstance.put).toHaveBeenCalledWith(
+          '/api/v3/series/100',
+          expect.objectContaining({
+            id: 100,
+            tags: expect.arrayContaining([1])
+          })
+        );
+      });
+  
+      it('should NOT update existing series tags if OVERRIDE_TAGS is disabled and ownership tag is missing', async () => {
+        const env = require('../util/env');
+        env.OVERRIDE_TAGS = false;
+  
+        mockAxiosInstance.get.mockImplementation((url) => {
+          if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+          if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+          if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+          if (url === '/api/v3/series') return Promise.resolve({ 
+            data: [{ id: 100, title: 'Barry', tvdbId: 12345, tmdbId: 73107, tags: [] }] // No tags
+          });
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        });
+  
+        await syncSeries(mockSeries, new Set());
+  
+        expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+      });
   });
 });

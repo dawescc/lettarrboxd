@@ -268,8 +268,8 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
         if (existingMoviesMap.has(tmdbId)) {
              const existingMovie = existingMoviesMap.get(tmdbId)!;
              
-             // OWNERSHIP CHECK: Only touch if it has the 'letterboxd' tag
-             if (letterboxdTagId && existingMovie.tags && existingMovie.tags.includes(letterboxdTagId)) {
+             // OWNERSHIP CHECK: Only touch if it has the 'letterboxd' tag OR override mode is on
+             if ((letterboxdTagId && existingMovie.tags && existingMovie.tags.includes(letterboxdTagId)) || env.OVERRIDE_TAGS) {
                  // Smart Tag Sync
                  const currentTags = existingMovie.tags || [];
                  const nextTags = calculateNextTagIds(currentTags, managedTagIds, finalTagIds);
