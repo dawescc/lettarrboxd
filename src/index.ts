@@ -63,7 +63,7 @@ async function processLists<T extends ScrapedMedia>(
     lists: BaseListConfig[],
     componentName: string, // 'letterboxd' or 'serializd'
     fetchItemsFn: (list: BaseListConfig) => Promise<T[]>,
-    syncItemsFn: (items: T[], managedTags: Set<string>) => Promise<void>,
+    syncItemsFn: (items: T[], managedTags: Set<string>, unsafeTags: Set<string>) => Promise<void>,
     plexType: 'movie' | 'show',
     plexGlobalTags: string[]
 ) {
@@ -149,7 +149,7 @@ async function processLists<T extends ScrapedMedia>(
         
         try {
             // Sync to Radarr/Sonarr (Pass managedTags for cleanup)
-            await syncItemsFn(uniqueItems, managedTags);
+            await syncItemsFn(uniqueItems, managedTags, unsafeTags);
             updateComponentStatus(targetComponent, 'ok');
             
             // Sync Plex
@@ -199,7 +199,7 @@ export async function run() {
             }
             return movies;
         },
-        (items, managedTags) => syncMovies(items, managedTags),
+        (items, managedTags, unsafeTags) => syncMovies(items, managedTags, unsafeTags),
         'movie',
         currentConfig.radarr?.tags || []
     );
@@ -213,7 +213,7 @@ export async function run() {
             const scraper = new SerializdScraper(list.url);
             return await scraper.getSeries();
         },
-        (items, managedTags) => syncSeries(items, managedTags), // Fix signature
+        (items, managedTags, unsafeTags) => syncSeries(items, managedTags, unsafeTags), // Fix signature
         'show',
         currentConfig.sonarr?.tags || []
     );

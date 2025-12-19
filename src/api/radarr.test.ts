@@ -500,6 +500,41 @@ describe('radarr API', () => {
 
       expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
+
+    it('should NOT delete movie if it is missing from watchlist but has an UNSAFE tag (from a failed list)', async () => {
+      mockEnv.REMOVE_MISSING_ITEMS = true;
+
+      // Setup: Movie exists, has 'letterboxd' tag AND 'watchlist' tag.
+      // 'watchlist' tag will be passed as unsafe.
+      mockAxiosInstance.get.mockImplementation((url) => {
+        if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 1, name: 'HD-1080p' }] });
+        if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ id: 1, path: '/movies' }] });
+        // Return tags including the unsafe one
+        if (url.includes('/tag')) return Promise.resolve({ 
+          data: [
+            { id: 1, label: 'letterboxd' },
+            { id: 99, label: 'unsafe-tag' } 
+          ] 
+        });
+        if (url === '/api/v3/movie') return Promise.resolve({
+          data: [{ 
+            id: 100, 
+            title: 'Protected Movie', 
+            tmdbId: 123, 
+            tags: [1, 99] // Has letterboxd AND unsafe-tag
+          }]
+        });
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      // Execute: Sync with NO movies (empty list matches nothing), but pass 'unsafe-tag' as unsafe.
+      const unsafeTags = new Set(['unsafe-tag']);
+      await syncMovies([], new Set(), unsafeTags);
+
+      // Verify: Should NOT have called delete
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+    });
   });
 });
+
 

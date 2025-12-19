@@ -245,7 +245,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<string>): Promise<void> {
+export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<string>, unsafeTags: Set<string> = new Set()): Promise<void> {
     const config = loadConfig();
     const sonarrConfig = config.sonarr;
     // Fallback to ENV if config absent
@@ -415,9 +415,27 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
     if (env.REMOVE_MISSING_ITEMS && serializdTagId) {
         logger.info('Checking for series to remove...');
 
+        // Fetch all tags to map ID -> Name for unsafe check
+        const allSonarrTags = await getAllTags();
+        const sonarrTagIdToLabel = new Map<number, string>();
+        allSonarrTags.forEach(t => sonarrTagIdToLabel.set(t.id, t.label));
+
         const seriesToRemove = existingSeries.filter((s: any) => {
             const hasTag = s.tags && s.tags.includes(serializdTagId);
             const notInWatchlist = !keepTvdbIds.has(s.tvdbId);
+
+            // FAILURE PROTECTION: Check if item has any "Unsafe" tags
+            const seriesTagIds: number[] = s.tags || [];
+            const hasUnsafeTag = seriesTagIds.some(id => {
+                const label = sonarrTagIdToLabel.get(id);
+                return label && unsafeTags.has(label);
+            });
+
+            if (hasUnsafeTag) {
+                logger.debug(`Skipping removal of ${s.title} because it has an unsafe tag.`);
+                return false;
+            }
+
             return hasTag && notInWatchlist;
         });
 

@@ -163,7 +163,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<string>): Promise<void> {
+export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<string>, unsafeTags: Set<string> = new Set()): Promise<void> {
     const config = loadConfig();
     const radarrConfig = config.radarr;
     // Fallback to ENV if config absent
@@ -300,12 +300,61 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
         // Create a set of TMDB IDs from the watchlist for fast lookup
         const watchlistTmdbIds = new Set(movies.map(m => m.tmdbId ? parseInt(m.tmdbId) : null).filter(id => id !== null));
 
+        // Create a Set of unsafe tag IDs for fast lookup
+        // Note: We might not have IDs for all unsafe tags if they didn't exist in Radarr yet,
+        // but if they didn't exist, no movie can have them, so it's fine.
+        // We only care about checking tags that ARE in Radarr.
+        const unsafeTagIds = new Set<number>();
+        unsafeTags.forEach(t => {
+            // We need to look up the ID again as it might not be in managedTags
+            // But ensureTagsAreAvailable was called with allRequiredTags which includes managedTags.
+            // If an unsafe tag was part of a FAILED list, it might NOT be in managedTags.
+            // So we rely on tagMap having it? 
+            // `tagMap` only contains IDs for tags we asked for in `allRequiredTags`.
+            // `allRequiredTags` includes `managedTags` but `processLists` REMOVED unsafe tags from managedTags!
+            // So `tagMap` might MISS the unsafe tags if they aren't used by any other successful list.
+            
+            // However, we can try to look it up in tagMap results just in case, 
+            // OR we iterate `existingTags` (which we fetched inside ensureTagsAreAvailable but didn't expose).
+            // Actually, we called `getAllTags` inside `ensureTagsAreAvailable` but returned a map of only requested tags.
+            
+            // Strategy: We need to map unsafeTags (names) to IDs.
+            // Since we can't trust tagMap to have them (we excluded them from the 'required' list passed to it),
+            // we should be careful. 
+            // BUT, if a movie in Radarr *has* the tag, the tag MUST exist in Radarr.
+            // So we can map the movie's tag IDs back to Names? Or map unsafe names to IDs?
+            // Let's assume we can fetch all tags again? Or just be robust.
+            
+            // To be safe/correct: We should fetch all tags map AGAIN or cache it better.
+            // But `ensureTagsAreAvailable` did the heavy lifting.
+            // Let's just assume we might miss some IDs if we don't fetch them.
+            // Hack/Optimization: Filter `moviesToRemove` by checking if any of their tags MATCH an unsafe tag name.
+            // This requires fetching all tags to map ID -> Name.
+        });
+
+        // Better approach: fetch all tags to get a full ID->Name map.
+        const allRadarrTags = await getAllTags();
+        const radarrTagIdToLabel = new Map<number, string>();
+        allRadarrTags.forEach(t => radarrTagIdToLabel.set(t.id, t.label));
+
         const moviesToRemove = existingMovies.filter((m: any) => {
             // Check if movie has the 'letterboxd' tag
             const hasTag = m.tags && m.tags.includes(letterboxdTagId);
             
             // Check if movie is NOT in the current watchlist
             const notInWatchlist = !watchlistTmdbIds.has(m.tmdbId);
+
+            // FAILURE PROTECTION: Check if movie has any "Unsafe" tags (tags from failed lists)
+            const movieTagIds: number[] = m.tags || [];
+            const hasUnsafeTag = movieTagIds.some(id => {
+                const label = radarrTagIdToLabel.get(id);
+                return label && unsafeTags.has(label);
+            });
+
+            if (hasUnsafeTag) {
+                logger.debug(`Skipping removal of ${m.title} because it has an unsafe tag (from a failed list).`);
+                return false;
+            }
 
             return hasTag && notInWatchlist;
         });
