@@ -99,7 +99,12 @@ async function processLists<T extends ScrapedMedia>(
             if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
 
             for (const item of items) {
-                if (!item.tmdbId) continue;
+                if (!item.tmdbId) {
+                    logger.warn(`Item '${item.name}' in list ${list.url} is missing a TMDB ID. Marking list tags as unsafe.`);
+                    // Mark tags as UNSAFE to prevent deletion of existing items with these tags
+                    if (list.tags) list.tags.forEach(t => unsafeTags.add(t));
+                    continue;
+                }
 
                 // Merge Logic (Thread-safe within the Map context)
                 if (allItems.has(item.tmdbId)) {
@@ -136,7 +141,7 @@ async function processLists<T extends ScrapedMedia>(
         if (!unsafeTags.has(t)) {
             managedTags.add(t);
         } else {
-            logger.warn(`Tag '${t}' is present in a failed list. It will be preserved on all items to ensure safety.`);
+            logger.warn(`Tag '${t}' is present in a list with failures or missing IDs. It will be preserved on all items to ensure safety.`);
         }
     });
 
@@ -187,7 +192,8 @@ export async function run() {
             
             // Apply Filters
             if (list.filters) {
-                return movies.filter(movie => {
+                const initialCount = movies.length;
+                const filteredMovies = movies.filter(movie => {
                     const { minRating, minYear, maxYear } = list.filters!;
                     
                     if (minRating !== undefined && (movie.rating === undefined || movie.rating === null || movie.rating < minRating)) return false;
@@ -196,6 +202,13 @@ export async function run() {
                     
                     return true;
                 });
+                
+                const excludedCount = initialCount - filteredMovies.length;
+                if (excludedCount > 0) {
+                    logger.info(`Filtered ${excludedCount} items from list ${list.url} based on configuration.`);
+                }
+                
+                return filteredMovies;
             }
             return movies;
         },

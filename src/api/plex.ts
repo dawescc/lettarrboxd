@@ -169,7 +169,7 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
     if (!config.plex) return;
     const { url, token } = config.plex;
 
-    process.stdout.write(`\r      Syncing Plex metadata...`);
+
 
     try {
         await retryOperation(async () => {
