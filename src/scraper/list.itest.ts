@@ -13,7 +13,7 @@ describe('list scraper integration tests', () => {
         5 // Only fetch first 5 to keep test fast
       );
 
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -42,7 +42,7 @@ describe('list scraper integration tests', () => {
         takeLimit
       );
 
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toBeDefined();
       expect(movies.length).toBe(takeLimit);
@@ -55,7 +55,7 @@ describe('list scraper integration tests', () => {
         'oldest'
       );
 
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toBeDefined();
       expect(movies.length).toBe(2);
@@ -70,7 +70,7 @@ describe('list scraper integration tests', () => {
         0 // Take 0 movies
       );
 
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -85,7 +85,7 @@ describe('list scraper integration tests', () => {
         3 // Only fetch first 3 to keep test fast
       );
 
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);

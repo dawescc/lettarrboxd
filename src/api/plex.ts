@@ -12,7 +12,9 @@ let plexClient: AxiosInstance | null = null;
 
 function getPlexClient(): AxiosInstance {
     if (!plexClient) {
-        plexClient = Axios.create();
+        plexClient = Axios.create({
+            timeout: 30000
+        });
     }
     return plexClient;
 }

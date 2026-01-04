@@ -11,8 +11,7 @@ import { SerializdScraper } from './scraper/serializd';
 import { syncSeries } from './api/sonarr';
 import * as plex from './api/plex';
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
-import { DEFAULT_TAG_NAME as RADARR_DEFAULT_TAG } from './api/radarr';
-import { DEFAULT_TAG_NAME as SONARR_DEFAULT_TAG } from './api/sonarr';
+import { TAG_LETTERBOXD, TAG_SERIALIZD } from './util/constants';
 
 // Types for our generic processor
 interface BaseListConfig {
@@ -34,7 +33,9 @@ interface BaseListConfig {
 function startScheduledMonitoring(): void {
   // Run immediately on startup
   setAppStatus('syncing');
-  run().finally(() => {
+  run().catch(e => {
+      logger.error('Fatal error in initial run:', e);
+  }).finally(() => {
     setAppStatus('idle');
     scheduleNextRun();
   });
@@ -46,7 +47,9 @@ function scheduleNextRun() {
   const intervalMs = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
   setTimeout(() => {
     setAppStatus('syncing');
-    run().finally(() => {
+    run().catch(e => {
+        logger.error('Fatal error in scheduled run:', e);
+    }).finally(() => {
       setAppStatus('idle');
       scheduleNextRun();
     });
@@ -59,11 +62,11 @@ function scheduleNextRun() {
 /**
  * Generic function to process a collection of lists (Movies or Series)
  */
-async function processLists<T extends ScrapedMedia>(
+export async function processLists<T extends ScrapedMedia>(
     lists: BaseListConfig[],
     componentName: string, // 'letterboxd' or 'serializd'
-    fetchItemsFn: (list: BaseListConfig) => Promise<T[]>,
-    syncItemsFn: (items: T[], managedTags: Set<string>, unsafeTags: Set<string>) => Promise<void>,
+    fetchItemsFn: (list: BaseListConfig) => Promise<{ items: T[], hasErrors: boolean }>,
+    syncItemsFn: (items: T[], managedTags: Set<string>, unsafeTags: Set<string>, abortCleanup: boolean) => Promise<void>,
     plexType: 'movie' | 'show',
     plexGlobalTags: string[]
 ) {
@@ -80,11 +83,13 @@ async function processLists<T extends ScrapedMedia>(
     const unsafeTags = new Set<string>();
 
     let hasError = false;
+    let abortCleanup = false; // Safety Lock
+
     const allItems = new Map<string, T>(); // TMDB ID -> Item
 
     logger.info(`Processing ${lists.length} ${componentName} lists...`);
 
-    // Parallel processing with concurrency limit
+
     await Bluebird.map(lists, async (list) => {
         if (!isListActive(list)) {
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
@@ -93,20 +98,39 @@ async function processLists<T extends ScrapedMedia>(
 
         try {
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            const items = await fetchItemsFn(list);
+            const { items, hasErrors: listHasErrors } = await fetchItemsFn(list);
             
-            // On Success: Mark tags as candidates for management
+            if (listHasErrors) {
+                logger.warn(`List ${list.url} reported partial errors. Marking associated tags as UNSAFE to prevent data loss.`);
+                if (list.tags && list.tags.length > 0) {
+                    list.tags.forEach(t => unsafeTags.add(t));
+                } else {
+                    // CRITICAL: If a list fails and has NO tags, we cannot know which items are safe to remove.
+                    // We must abort the entire cleanup process for this component to prevent data loss.
+                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK: Cleanup will be aborted.`);
+                    abortCleanup = true;
+                }
+                hasError = true;
+            }
+
+
             if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
 
             for (const item of items) {
                 if (!item.tmdbId) {
                     logger.warn(`Item '${item.name}' in list ${list.url} is missing a TMDB ID. Marking list tags as unsafe.`);
                     // Mark tags as UNSAFE to prevent deletion of existing items with these tags
-                    if (list.tags) list.tags.forEach(t => unsafeTags.add(t));
+                    if (list.tags && list.tags.length > 0) {
+                        list.tags.forEach(t => unsafeTags.add(t));
+                    } else {
+                         // Same logic: If items are missing IDs and list has no tags, we can't trust the state.
+                         logger.error(`List ${list.url} has items without IDs and NO tags. Activating SAFETY LOCK.`);
+                         abortCleanup = true;
+                    }
                     continue;
                 }
 
-                // Merge Logic (Thread-safe within the Map context)
+
                 if (allItems.has(item.tmdbId)) {
                     const existing = allItems.get(item.tmdbId)!;
                     const existingTags = existing.tags || [];
@@ -129,8 +153,13 @@ async function processLists<T extends ScrapedMedia>(
         } catch (e: any) {
             logger.error(`Error fetching list ${list.url}:`, e);
             hasError = true;
-            // On Failure: Mark tags as UNSAFE
-            if (list.tags) list.tags.forEach(t => unsafeTags.add(t));
+
+            if (list.tags && list.tags.length > 0) {
+                list.tags.forEach(t => unsafeTags.add(t));
+            } else {
+                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
+                abortCleanup = true;
+            }
         }
     }, { concurrency: 5 });
 
@@ -153,13 +182,12 @@ async function processLists<T extends ScrapedMedia>(
         logger.info(`Total unique items found across all ${componentName} lists: ${uniqueItems.length}`);
         
         try {
-            // Sync to Radarr/Sonarr (Pass managedTags for cleanup)
-            await syncItemsFn(uniqueItems, managedTags, unsafeTags);
+
+            await syncItemsFn(uniqueItems, managedTags, unsafeTags, abortCleanup);
             updateComponentStatus(targetComponent, 'ok');
             
-            // Sync Plex
-            // We pass the component specific default tag (e.g. 'letterboxd') + any global tags from config
-            const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? RADARR_DEFAULT_TAG : SONARR_DEFAULT_TAG];
+
+            const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? TAG_LETTERBOXD : TAG_SERIALIZD];
             
             // Collect Managed Tags for Plex (Global + List Specific)
             const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
@@ -182,13 +210,13 @@ export async function run() {
     // Reload config on every run to support dynamic updates (e.g. adding new lists)
     const currentConfig = loadConfig();
 
-    // 1. Process Letterboxd Lists
+
     await processLists<LetterboxdMovie>(
         currentConfig.letterboxd,
         'letterboxd',
         async (list) => {
             // Letterboxd Fetcher + Filter
-            const movies = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
+            const { items: movies, hasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
             
             // Apply Filters
             if (list.filters) {
@@ -208,16 +236,16 @@ export async function run() {
                     logger.info(`Filtered ${excludedCount} items from list ${list.url} based on configuration.`);
                 }
                 
-                return filteredMovies;
+                return { items: filteredMovies, hasErrors }; // Propagate errors even if filtering happened
             }
-            return movies;
+            return { items: movies, hasErrors };
         },
-        (items, managedTags, unsafeTags) => syncMovies(items, managedTags, unsafeTags),
+        (items, managedTags, unsafeTags, abortCleanup) => syncMovies(items, managedTags, unsafeTags, abortCleanup),
         'movie',
         currentConfig.radarr?.tags || []
     );
 
-    // 2. Process Serializd Lists
+
     await processLists<ScrapedSeries>(
         currentConfig.serializd,
         'serializd',
@@ -226,7 +254,7 @@ export async function run() {
             const scraper = new SerializdScraper(list.url);
             return await scraper.getSeries();
         },
-        (items, managedTags, unsafeTags) => syncSeries(items, managedTags, unsafeTags), // Fix signature
+        (items, managedTags, unsafeTags, abortCleanup) => syncSeries(items, managedTags, unsafeTags, abortCleanup), 
         'show',
         currentConfig.sonarr?.tags || []
     );

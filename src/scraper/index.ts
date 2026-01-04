@@ -59,7 +59,7 @@ export const fetchMoviesFromUrl = async (
   url: string, 
   take?: number, 
   strategy?: 'oldest' | 'newest'
-): Promise<LetterboxdMovie[]> => {
+): Promise<{ items: LetterboxdMovie[], hasErrors: boolean }> => {
   const listType = detectListType(url);
   
   if (!listType) {

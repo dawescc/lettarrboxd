@@ -4,8 +4,35 @@ import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
 import Bluebird from 'bluebird';
+import { retryOperation } from '../util/retry';
+import { calculateNextTagIds } from '../util/tagLogic';
+import { resolveTagsForItems } from '../util/tagHelper';
 
-interface SonarrSeries {
+// Types
+export interface SonarrSeason {
+    seasonNumber: number;
+    monitored: boolean;
+    statistics?: {
+        episodeCount: number;
+        totalEpisodeCount: number;
+        sizeOnDisk: number;
+        percentOfEpisodes: number;
+    };
+}
+
+export interface SonarrSeriesResponse {
+    id: number;
+    title: string;
+    tvdbId: number;
+    tmdbId?: number;
+    tags: number[];
+    qualityProfileId: number;
+    monitored: boolean;
+    path: string;
+    seasons: SonarrSeason[];
+}
+
+export interface SonarrSeries {
     title: string;
     qualityProfileId: number;
     rootFolderPath: string;
@@ -21,27 +48,19 @@ interface SonarrSeries {
     }
 }
 
-export const DEFAULT_TAG_NAME = 'serializd';
+export interface SonarrProfile {
+    id: number;
+    name: string;
+}
 
-const axios = Axios.create({
-    baseURL: env.SONARR_API_URL,
-    headers: {
-        'X-Api-Key': env.SONARR_API_KEY
-    }
-});
+export interface SonarrRootFolder {
+    id: number;
+    path: string;
+}
 
-import { retryOperation } from '../util/retry';
-import { calculateNextTagIds } from '../util/tagLogic';
-
-interface SonarrSeason {
-    seasonNumber: number;
-    monitored: boolean;
-    statistics?: {
-        episodeCount: number;
-        totalEpisodeCount: number;
-        sizeOnDisk: number;
-        percentOfEpisodes: number;
-    };
+export interface SonarrTag {
+    id: number;
+    label: string;
 }
 
 interface SonarrLookupResult {
@@ -51,12 +70,21 @@ interface SonarrLookupResult {
     id?: number;
 }
 
+import { TAG_SERIALIZD as DEFAULT_TAG_NAME } from '../util/constants';
 
+const axios = Axios.create({
+    baseURL: env.SONARR_API_URL,
+    headers: {
+        'X-Api-Key': env.SONARR_API_KEY
+    },
+    timeout: 30000 // 30 second timeout
+});
 
-export async function getAllQualityProfiles(): Promise<any[]> {
+// Helpers
+export async function getAllQualityProfiles(): Promise<SonarrProfile[]> {
     try {
         return await retryOperation(async () => {
-            const response = await axios.get('/api/v3/qualityprofile');
+            const response = await axios.get<SonarrProfile[]>('/api/v3/qualityprofile');
             return response.data;
         }, 'get all quality profiles');
     } catch (error) {
@@ -68,7 +96,7 @@ export async function getAllQualityProfiles(): Promise<any[]> {
 export async function getRootFolder(): Promise<string | null> {
     try {
         return await retryOperation(async () => {
-            const response = await axios.get('/api/v3/rootfolder');
+            const response = await axios.get<SonarrRootFolder[]>('/api/v3/rootfolder');
             const rootFolders = response.data;
 
             if (rootFolders.length > 0) {
@@ -86,9 +114,9 @@ export async function getRootFolder(): Promise<string | null> {
     }
 }
 
-export async function getRootFolderById(id: string) {
+export async function getRootFolderById(id: string): Promise<string | null> {
     try {
-        const response = await axios.get(`/api/v3/rootfolder/${id}`);
+        const response = await axios.get<SonarrRootFolder>(`/api/v3/rootfolder/${id}`);
         const { data } = response;
         if (data) {
             return data.path;
@@ -101,9 +129,9 @@ export async function getRootFolderById(id: string) {
     }
 }
 
-export async function getAllTags(): Promise<Array<{ id: number, label: string }>> {
+export async function getAllTags(): Promise<SonarrTag[]> {
     try {
-        const response = await axios.get('/api/v3/tag');
+        const response = await axios.get<SonarrTag[]>('/api/v3/tag');
         return response.data;
     } catch (error) {
         logger.error('Error getting all tags from Sonarr:', error as any);
@@ -114,7 +142,7 @@ export async function getAllTags(): Promise<Array<{ id: number, label: string }>
 export async function createTag(label: string): Promise<number | null> {
     try {
         logger.debug(`Creating new Sonarr tag: ${label}`);
-        const response = await axios.post('/api/v3/tag', { label });
+        const response = await axios.post<SonarrTag>('/api/v3/tag', { label });
         return response.data.id;
     } catch (error) {
         logger.error(`Error creating Sonarr tag ${label}:`, error as any);
@@ -122,35 +150,10 @@ export async function createTag(label: string): Promise<number | null> {
     }
 }
 
-export async function ensureTagsAreAvailable(requiredTags: string[]): Promise<Map<string, number>> {
-    const tagMap = new Map<string, number>();
-    const distinctTags = [...new Set(requiredTags)];
-    
-    if (distinctTags.length === 0) return tagMap;
 
-    // 1. Fetch all existing tags ONCE
-    const existingTags = await getAllTags();
-    existingTags.forEach(t => tagMap.set(t.label, t.id));
-
-    // 2. Find which ones are missing
-    const missingTags = distinctTags.filter(t => !tagMap.has(t));
-
-    if (missingTags.length > 0) {
-        logger.info(`Creating ${missingTags.length} new tags in Sonarr...`);
-        for (const tagLabel of missingTags) {
-            const newId = await createTag(tagLabel);
-            if (newId) {
-                tagMap.set(tagLabel, newId);
-            }
-        }
-    }
-
-    return tagMap;
-}
 
 export async function getSeriesLookup(tmdbId: string): Promise<SonarrLookupResult | null> {
     try {
-        // Sonarr allows looking up by "tmdb:12345"
         const response = await axios.get<SonarrLookupResult[]>('/api/v3/series/lookup', {
             params: { term: `tmdb:${tmdbId}` }
         });
@@ -169,7 +172,6 @@ function configureSeasonMonitoring(
     availableSeasons: SonarrSeason[], 
     targetSeasonNumbers?: number[]
 ): Array<{ seasonNumber: number; monitored: boolean }> {
-    // If we have specific target seasons (from Serializd), use them
     if (targetSeasonNumbers && targetSeasonNumbers.length > 0) {
         return availableSeasons.map(season => ({
             seasonNumber: season.seasonNumber,
@@ -177,7 +179,6 @@ function configureSeasonMonitoring(
         }));
     }
 
-    // Otherwise fall back to the global strategy
     const strategy = env.SONARR_SEASON_MONITORING;
     
     return availableSeasons.map((season: SonarrSeason, index: number) => {
@@ -192,11 +193,9 @@ function configureSeasonMonitoring(
                 monitored = seasonNumber === 1;
                 break;
             case 'latest':
-                // Monitor the last season (highest season number)
                 monitored = index === availableSeasons.length - 1;
                 break;
             case 'future':
-                // Monitor only seasons that haven't aired yet
                 monitored = season.statistics?.episodeCount === 0 || !season.statistics;
                 break;
             case 'none':
@@ -211,10 +210,10 @@ function configureSeasonMonitoring(
     });
 }
 
-export async function getAllSeries(): Promise<any[]> {
+export async function getAllSeries(): Promise<SonarrSeriesResponse[]> {
     try {
         return await retryOperation(async () => {
-            const response = await axios.get('/api/v3/series');
+            const response = await axios.get<SonarrSeriesResponse[]>('/api/v3/series');
             return response.data;
         }, 'get all series');
     } catch (error) {
@@ -245,21 +244,31 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
     }
 }
 
-export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<string>, unsafeTags: Set<string> = new Set()): Promise<void> {
+
+
+interface SyncContext {
+    globalProfileId: number;
+    rootFolderPath: string;
+    profileMap: Map<string, number>;
+    tagMap: Map<string, number>;
+    managedTagIds: Set<number>;
+    systemTagIds: number[];
+    serializdTagId?: number;
+    tmdbToTvdbMap: Map<number, number>;
+}
+
+async function resolveSyncConfig(): Promise<{ globalProfileId: number; rootFolderPath: string; profileMap: Map<string, number> }> {
     const config = loadConfig();
     const sonarrConfig = config.sonarr;
-    // Fallback to ENV if config absent
-    // Fallback to ENV if config absent
     const globalQualityProfileName = sonarrConfig?.qualityProfile || env.SONARR_QUALITY_PROFILE;
 
     if (!globalQualityProfileName) {
         throw new Error('Sonarr global quality profile not configured');
     }
 
-    // Cache all profiles
     const allProfiles = await getAllQualityProfiles();
     const profileMap = new Map<string, number>();
-    allProfiles.forEach((p: any) => profileMap.set(p.name, p.id));
+    allProfiles.forEach(p => profileMap.set(p.name, p.id));
 
     const globalProfileId = profileMap.get(globalQualityProfileName);
     if (!globalProfileId) {
@@ -274,183 +283,185 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
         throw new Error('Could not get Sonarr root folder');
     }
 
-    // --- Tag Resolution ---
+    return { globalProfileId, rootFolderPath, profileMap };
+}
 
-    // 1. Collect ALL required tags
+async function resolveSyncTags(seriesList: ScrapedSeries[], managedTags: Set<string>): Promise<{
+    tagMap: Map<string, number>;
+    managedTagIds: Set<number>;
+    systemTagIds: number[];
+    serializdTagId?: number;
+}> {
+    const config = loadConfig();
+    const sonarrConfig = config.sonarr;
     const envTags = (env.SONARR_TAGS || '').split(',').map(t => t.trim()).filter(t => t.length > 0);
     const configTags = sonarrConfig?.tags || [];
     const systemTagNames = [...new Set([DEFAULT_TAG_NAME, ...envTags, ...configTags])];
 
-    const seriesTagNames = new Set<string>();
-    seriesList.forEach(s => {
-        if (s.tags) {
-            s.tags.forEach(t => seriesTagNames.add(t));
+    const result = await resolveTagsForItems(
+        seriesList.map(s => ({ tags: s.tags })),
+        managedTags,
+        systemTagNames,
+        DEFAULT_TAG_NAME,
+        {
+            getAllTags: getAllTags,
+            createTag: createTag
         }
-    });
+    );
 
-    const allRequiredTags = [...new Set([...systemTagNames, ...seriesTagNames, ...managedTags])];
+    return {
+        tagMap: result.tagMap,
+        managedTagIds: result.managedTagIds,
+        systemTagIds: result.systemTagIds,
+        serializdTagId: result.defaultTagId
+    };
+}
 
-    // 2. Resolve IDs (Batch operation)
-    logger.info(`Resolving ${allRequiredTags.length} tags for Sonarr...`);
-    const tagMap = await ensureTagsAreAvailable(allRequiredTags);
-
-    // Map managed tags (strings) to IDs for cleaning
-    const managedTagIds = new Set<number>();
-    managedTags.forEach(t => {
-        const id = tagMap.get(t);
-        if (id) managedTagIds.add(id);
-    });
-    // Add system tags to managed list
-    systemTagNames.forEach(t => {
-        const id = tagMap.get(t);
-        if (id) managedTagIds.add(id);
-    });
-
-    const startSystemTagIds = systemTagNames
-        .map(name => tagMap.get(name))
+async function processSeriesSync(
+    item: ScrapedSeries, 
+    ctx: SyncContext, 
+    existingSeries: SonarrSeriesResponse[], 
+    keepTvdbIds: Set<number>
+): Promise<{ wasAdded: boolean; tvdbId: number } | null> {
+    const seriesSpecificTagIds = (item.tags || [])
+        .map(t => ctx.tagMap.get(t))
         .filter((id): id is number => id !== undefined);
-        
-    const serializdTagId = tagMap.get(DEFAULT_TAG_NAME);
+    
+    const finalTagIds = [...new Set([...ctx.systemTagIds, ...seriesSpecificTagIds])];
 
-    // --- Sync Logic ---
+    const existingItem = existingSeries.find(s => s.tvdbId === ctx.tmdbToTvdbMap.get(parseInt(item.tmdbId || '0')) || s.tmdbId === parseInt(item.tmdbId || '0'));
 
-    // 1. Fetch all existing series
+    if (existingItem) {
+         const tvdbId = existingItem.tvdbId;
+         keepTvdbIds.add(tvdbId);
+
+         let currentItemState = { ...existingItem };
+
+
+         if ((ctx.serializdTagId && currentItemState.tags && currentItemState.tags.includes(ctx.serializdTagId)) || env.OVERRIDE_TAGS) {
+             const currentTags = currentItemState.tags || [];
+             const nextTags = calculateNextTagIds(currentTags, ctx.managedTagIds, finalTagIds);
+
+             if (nextTags.length !== currentTags.length || !nextTags.every(t => currentTags.includes(t))) {
+                 await updateSeries(currentItemState, nextTags);
+                 currentItemState.tags = nextTags;
+             }
+         }
+
+         if (item.seasons && item.seasons.length > 0) {
+             await updateSeriesSeasonsRaw(currentItemState, item.seasons);
+         }
+         
+         logger.debug(`Series ${item.name} already exists in Sonarr.`);
+         return { tvdbId, wasAdded: false };
+    }
+
+    // Resolve Quality Profile
+    let qualityProfileId = ctx.globalProfileId;
+    if (item.qualityProfile) {
+        const overrideId = ctx.profileMap.get(item.qualityProfile);
+        if (overrideId) {
+            qualityProfileId = overrideId;
+        } else {
+            logger.warn(`Quality profile override '${item.qualityProfile}' not found in Sonarr. Using global default.`);
+        }
+    }
+
+    return await addSeries(item, qualityProfileId, ctx.rootFolderPath, finalTagIds, existingSeries);
+}
+
+
+async function processLibraryCleanup(
+    existingSeries: SonarrSeriesResponse[], 
+    keepTvdbIds: Set<number>, 
+    serializdTagId: number, 
+    unsafeTags: Set<string>
+): Promise<void> {
+    if (!env.REMOVE_MISSING_ITEMS) return;
+
+    logger.info('Checking for series to remove...');
+
+    const allSonarrTags = await getAllTags();
+    const sonarrTagIdToLabel = new Map<number, string>();
+    allSonarrTags.forEach(t => sonarrTagIdToLabel.set(t.id, t.label));
+
+    const seriesToRemove = existingSeries.filter(s => {
+        const hasTag = s.tags && s.tags.includes(serializdTagId);
+        const notInWatchlist = !keepTvdbIds.has(s.tvdbId);
+
+
+        const seriesTagIds: number[] = s.tags || [];
+        const hasUnsafeTag = seriesTagIds.some(id => {
+            const label = sonarrTagIdToLabel.get(id);
+            return label && unsafeTags.has(label);
+        });
+
+        if (hasUnsafeTag) {
+            logger.debug(`Skipping removal of ${s.title} because it has an unsafe tag.`);
+            return false;
+        }
+
+        return hasTag && notInWatchlist;
+    });
+
+    if (seriesToRemove.length > 0) {
+        logger.info(`Found ${seriesToRemove.length} series to remove.`);
+        await Bluebird.map(seriesToRemove, (s) => {
+            return deleteSeries(s.id, s.title);
+        }, { concurrency: 3 });
+    } else {
+        logger.info('No series to remove.');
+    }
+}
+
+export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<string>, unsafeTags: Set<string> = new Set(), abortCleanup: boolean = false): Promise<void> {
+
+    const { globalProfileId, rootFolderPath, profileMap } = await resolveSyncConfig();
+    const { tagMap, managedTagIds, systemTagIds, serializdTagId } = await resolveSyncTags(seriesList, managedTags);
+
+
     logger.info('Fetching existing series from Sonarr...');
     const existingSeries = await getAllSeries();
     logger.info(`Found ${existingSeries.length} existing series in Sonarr.`);
 
-    // 2. Build Maps for efficient lookup
-    // Map TMDB ID -> TVDB ID (if available in Sonarr data)
-    // Sonarr v3 series objects often have 'tvdbId' and sometimes 'tmdbId' (or we might need to rely on lookup)
     const tmdbToTvdbMap = new Map<number, number>();
-    const existingTvdbIds = new Set<number>();
-
-    existingSeries.forEach((s: any) => {
-        if (s.tvdbId) existingTvdbIds.add(s.tvdbId);
-
+    existingSeries.forEach(s => {
         if (s.tmdbId) tmdbToTvdbMap.set(s.tmdbId, s.tvdbId);
     });
 
+    const context: SyncContext = {
+        globalProfileId,
+        rootFolderPath,
+        profileMap,
+        tagMap,
+        managedTagIds,
+        systemTagIds,
+        serializdTagId,
+        tmdbToTvdbMap
+    };
+
     const keepTvdbIds = new Set<number>();
 
-    // 3. Process Watchlist Items (Add/Update list of "Keep" IDs)
+
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
     const results = await Bluebird.map(seriesList, async (item) => {
-        if (!item.tmdbId) return;
-        const tmdbId = parseInt(item.tmdbId);
-
-        // Calculate tags for this specific series
-        const seriesSpecificTagIds = (item.tags || [])
-            .map(t => tagMap.get(t))
-            .filter((id): id is number => id !== undefined);
-        
-        // Merge system tags + series tags
-        const finalTagIds = [...new Set([...startSystemTagIds, ...seriesSpecificTagIds])];
-
-        const existingItem = existingSeries.find((s: any) => s.tvdbId === tmdbToTvdbMap.get(tmdbId) || s.tmdbId === tmdbId);
-
-        if (existingItem) {
-             const tvdbId = existingItem.tvdbId;
-             keepTvdbIds.add(tvdbId);
-
-             // Clone string item so we can mutate it locally between updates
-             let currentItemState = { ...existingItem };
-
-             // OWNERSHIP CHECK
-             if ((serializdTagId && currentItemState.tags && currentItemState.tags.includes(serializdTagId)) || env.OVERRIDE_TAGS) {
-                 // Smart Tag Sync
-                 const currentTags = currentItemState.tags || [];
-                 const nextTags = calculateNextTagIds(currentTags, managedTagIds, finalTagIds);
-
-                 if (nextTags.length !== currentTags.length || !nextTags.every(t => currentTags.includes(t))) {
-                     // Perform update
-                     await updateSeries(currentItemState, nextTags);
-                     
-                     // Update local state so next operation uses new tags
-                     currentItemState.tags = nextTags;
-                 }
-             }
-
-             // Check seasons
-             if (item.seasons && item.seasons.length > 0) {
-                 await updateSeriesSeasonsRaw(currentItemState, item.seasons);
-             }
-             
-             logger.debug(`Series ${item.name} already exists in Sonarr.`);
-             return { tvdbId, wasAdded: false };
-        }
-
-        // Optimization: If we already know the TVDB ID from our local map, use it
-        if (tmdbToTvdbMap.has(tmdbId)) {
-            // Already handled in block above if found in existingSeries, but just in case of race condition logic
-            // Skipping redundant logic here as existingItem check covers it
-        }
-
-        // If not in map, we might still have it (if tmdbId wasn't in the Sonarr object), 
-        // OR we need to add it. In either case, 'addSeries' handles the lookup and existence check.
-        // We need 'addSeries' to return the TVDB ID so we can mark it as "Keep".
-        // Resolve Quality Profile
-        let qualityProfileId = globalProfileId;
-        if (item.qualityProfile) {
-            const overrideId = profileMap.get(item.qualityProfile);
-            if (overrideId) {
-                qualityProfileId = overrideId;
-            } else {
-                logger.warn(`Quality profile override '${item.qualityProfile}' not found in Sonarr. Using global default.`);
-            }
-        }
-
-        const result = await addSeries(item, qualityProfileId, rootFolderPath, finalTagIds, existingTvdbIds, existingSeries);
-        if (result) {
-            keepTvdbIds.add(result.tvdbId);
-            return result;
-        }
-        return null;
+        const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
+        if (result) keepTvdbIds.add(result.tvdbId);
+        return result;
     }, { concurrency: 3 });
 
     const addedCount = results.filter(r => r && r.wasAdded).length;
     logger.info(`Finished processing series. Added ${addedCount} new series.`);
 
-    // 4. Remove missing series (if enabled)
-    if (env.REMOVE_MISSING_ITEMS && serializdTagId) {
-        logger.info('Checking for series to remove...');
 
-        // Fetch all tags to map ID -> Name for unsafe check
-        const allSonarrTags = await getAllTags();
-        const sonarrTagIdToLabel = new Map<number, string>();
-        allSonarrTags.forEach(t => sonarrTagIdToLabel.set(t.id, t.label));
-
-        const seriesToRemove = existingSeries.filter((s: any) => {
-            const hasTag = s.tags && s.tags.includes(serializdTagId);
-            const notInWatchlist = !keepTvdbIds.has(s.tvdbId);
-
-            // FAILURE PROTECTION: Check if item has any "Unsafe" tags
-            const seriesTagIds: number[] = s.tags || [];
-            const hasUnsafeTag = seriesTagIds.some(id => {
-                const label = sonarrTagIdToLabel.get(id);
-                return label && unsafeTags.has(label);
-            });
-
-            if (hasUnsafeTag) {
-                logger.debug(`Skipping removal of ${s.title} because it has an unsafe tag.`);
-                return false;
-            }
-
-            return hasTag && notInWatchlist;
-        });
-
-        if (seriesToRemove.length > 0) {
-            logger.info(`Found ${seriesToRemove.length} series to remove.`);
-            await Bluebird.map(seriesToRemove, (s: any) => {
-                return deleteSeries(s.id, s.title);
-            }, { concurrency: 3 });
-        } else {
-            logger.info('No series to remove.');
-        }
+    if (abortCleanup) {
+        logger.warn('Cleanup phase ABORTED due to safety lock. A list without tags failed to scrape, so we cannot safely remove items.');
+    } else if (serializdTagId) {
+        await processLibraryCleanup(existingSeries, keepTvdbIds, serializdTagId, unsafeTags);
     }
 }
 
-export async function updateSeries(existingSeries: any, newTags: number[]): Promise<void> {
+export async function updateSeries(existingSeries: SonarrSeriesResponse, newTags: number[]): Promise<void> {
     try {
         if (env.DRY_RUN) {
             logger.info(`[DRY RUN] Would update tags for series: ${existingSeries.title} -> [${newTags.join(', ')}]`);
@@ -474,8 +485,7 @@ async function addSeries(
     qualityProfileId: number, 
     rootFolderPath: string, 
     tagIds: number[], 
-    existingTvdbIds: Set<number>,
-    allExistingSeries: any[]
+    existingSeriesCache: SonarrSeriesResponse[]
 ): Promise<{ tvdbId: number, wasAdded: boolean } | null> {
     try {
         if (!item.tmdbId) {
@@ -483,7 +493,6 @@ async function addSeries(
             return null;
         }
 
-        // We have to lookup to get the TVDB ID and Title
         const lookupResult = await getSeriesLookup(item.tmdbId);
         if (!lookupResult) {
             logger.warn(`Could not find series in Sonarr lookup: ${item.name} (TMDB: ${item.tmdbId})`);
@@ -493,19 +502,17 @@ async function addSeries(
         const tvdbId = lookupResult.tvdbId;
 
         // Check if it already exists (using the TVDB ID we just found)
-        if (existingTvdbIds.has(tvdbId)) {
+        // We check the cache passed in.
+        const existingItem = existingSeriesCache.find(s => s.tvdbId === tvdbId);
+
+        if (existingItem) {
             logger.debug(`Series already exists in Sonarr (lookup match): ${lookupResult.title}`);
-            // If seasons are provided, we should check/update them here too (edge case where tmdb map missed it but it exists)
             if (item.seasons && item.seasons.length > 0) {
-                 const existingItem = allExistingSeries.find((s: any) => s.tvdbId === tvdbId);
-                 if (existingItem) {
-                     await updateSeriesSeasonsRaw(existingItem, item.seasons);
-                 }
+                 await updateSeriesSeasonsRaw(existingItem, item.seasons);
             }
             return { tvdbId, wasAdded: false };
         }
 
-        // If we are here, it's new. Add it.
         const seasons = configureSeasonMonitoring(lookupResult.seasons || [], item.seasons);
 
         const payload: SonarrSeries = {
@@ -523,7 +530,7 @@ async function addSeries(
 
         if (env.DRY_RUN) {
             logger.info(payload, `[DRY RUN] Would add series to Sonarr: ${payload.title}`);
-            return { tvdbId, wasAdded: false }; // Treat dry run as not added for counting purposes, or maybe true? usually dry run logs say "would add". Let's say false to avoid confusion in "Added X series" log.
+            return { tvdbId, wasAdded: false };
         }
 
         const response = await axios.post('/api/v3/series', payload);
@@ -537,12 +544,12 @@ async function addSeries(
     }
 }
 
-async function updateSeriesSeasonsRaw(existingSeries: any, targetSeasons: number[]): Promise<void> {
+async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targetSeasons: number[]): Promise<void> {
     try {
         if (!existingSeries || !existingSeries.seasons) return;
 
         let needsUpdate = false;
-        const newSeasons = existingSeries.seasons.map((season: any) => {
+        const newSeasons = existingSeries.seasons.map((season) => {
             const shouldBeMonitored = targetSeasons.includes(season.seasonNumber);
             
             if (season.monitored !== shouldBeMonitored) {
@@ -559,8 +566,6 @@ async function updateSeriesSeasonsRaw(existingSeries: any, targetSeasons: number
             }
 
             logger.info(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
-            // Update the series in Sonarr
-            // We need to send the full series object back, but with updated seasons
             const updatePayload = {
                 ...existingSeries,
                 seasons: newSeasons

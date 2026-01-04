@@ -12,6 +12,11 @@ jest.mock('../util/logger', () => ({
 // Mock the movie module
 jest.mock('./movie');
 
+// Mock retry operation
+jest.mock('../util/retry', () => ({
+    retryOperation: async (op: any) => await op(),
+}));
+
 // Mock fetch globally
 global.fetch = jest.fn() as unknown as typeof fetch;
 
@@ -59,7 +64,7 @@ describe('ListScraper', () => {
         .mockResolvedValueOnce(mockMovie2);
 
       const scraper = new ListScraper('https://letterboxd.com/user/watchlist/');
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(2);
       expect(movies[0]).toEqual(mockMovie1);
@@ -120,13 +125,14 @@ describe('ListScraper', () => {
         .mockResolvedValueOnce(mockMovie2);
 
       const scraper = new ListScraper('https://letterboxd.com/user/watchlist/');
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(2);
       expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(global.fetch).toHaveBeenNthCalledWith(
         2,
-        'https://letterboxd.com/user/watchlist/page/2/'
+        'https://letterboxd.com/user/watchlist/page/2/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -169,7 +175,7 @@ describe('ListScraper', () => {
         .mockResolvedValueOnce(mockMovie2);
 
       const scraper = new ListScraper('https://letterboxd.com/user/watchlist/', 2);
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(2);
       expect(movieModule.getMovie).toHaveBeenCalledTimes(2);
@@ -208,7 +214,8 @@ describe('ListScraper', () => {
       await scraper.getMovies();
 
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/user/watchlist/by/date-earliest/'
+        'https://letterboxd.com/user/watchlist/by/date-earliest/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -220,14 +227,14 @@ describe('ListScraper', () => {
 
       const scraper = new ListScraper('https://letterboxd.com/user/watchlist/');
 
-      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch list page: 500');
+      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch page: 500');
     });
 
     it('should handle empty movie list', async () => {
       const mockHtml = `
         <html>
           <body>
-            <div class="no-results">No movies found</div>
+            <div class="no-results">No films</div>
           </body>
         </html>
       `;
@@ -238,7 +245,7 @@ describe('ListScraper', () => {
       });
 
       const scraper = new ListScraper('https://letterboxd.com/user/watchlist/');
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(0);
       expect(movieModule.getMovie).not.toHaveBeenCalled();

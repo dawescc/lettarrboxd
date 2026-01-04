@@ -1,71 +1,25 @@
+
 import * as cheerio from 'cheerio';
-import Bluebird from 'bluebird';
-import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
-import { getMovie } from './movie';
+import { LETTERBOXD_BASE_URL } from ".";
 import logger from '../util/logger';
-import Scraper from './scraper.interface';
+import { BaseScraper } from './scraper.base';
 
-export class ListScraper implements Scraper {
-    constructor(private url: string, private take?: number, private strategy?: 'oldest' | 'newest') {}
+export class ListScraper extends BaseScraper {
+    constructor(url: string, take?: number, strategy?: 'oldest' | 'newest') {
+        super(url, take, strategy);
+    }
 
-    async getMovies(): Promise<LetterboxdMovie[]> {
-        let processUrl = this.url;
-        
+    protected transformUrl(url: string): string {
         if (this.strategy === 'oldest') {
-            processUrl = this.url.replace(/\/$/, '') + '/by/date-earliest/';
+            return url.replace(/\/$/, '') + '/by/date-earliest/';
         }
-        
-        const allMovieLinks = await this.getAllMovieLinks(processUrl);
-        const linksToProcess = typeof this.take === 'number' ? allMovieLinks.slice(0, this.take) : allMovieLinks;
-
-        const movies = await Bluebird.map(linksToProcess, link => {
-            return getMovie(link);
-        }, {
-            concurrency: 10
-        });
-        
-        return movies;
+        return url;
     }
 
-    private async getAllMovieLinks(baseUrl: string): Promise<string[]> {
-        let currentUrl: string | null = baseUrl;
-        const allLinks: string[] = [];
-        
-        while (currentUrl) {
-            logger.info(`Fetching page: ${currentUrl}`);
-            
-            const response = await fetch(currentUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch list page: ${response.status}`);
-            }
-            
-            const html = await response.text();
-            const pageLinks = this.getMovieLinksFromHtml(html);
-            allLinks.push(...pageLinks);
-            
-            if (this.take && allLinks.length >= this.take) {
-                logger.debug(`Reached take limit (${this.take}). Stopping pagination.`);
-                currentUrl = null;
-            } else {
-                currentUrl = this.getNextPageUrl(html);
-                
-                if (currentUrl) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            }
-        }
-        
-        logger.debug(`Retrieved ${allLinks.length} links from letterboxd list.`);
-
-        return allLinks;
-    }
-
-    private getMovieLinksFromHtml(html: string): string[] {
+    protected getMovieLinksFromHtml(html: string): string[] {
         const $ = cheerio.load(html);
         const links: string[] = [];
         
-        logger.debug(`Parsing HTML length: ${html.length}`);
-
         // React Component (Modern Lists)
         $('.react-component[data-target-link]').each((_, element) => {
             const filmLink = $(element).attr('data-target-link');
@@ -88,15 +42,10 @@ export class ListScraper implements Scraper {
             });
         }
 
-        if (links.length === 0) {
-            logger.warn(`Scraper found 0 links.`);
-        }
-
-        logger.debug(`Found ${links.length} links.`);
         return links;
     }
 
-    private getNextPageUrl(html: string): string | null {
+    protected getNextPageUrl(html: string): string | null {
         const $ = cheerio.load(html);
         const nextLink = $('.paginate-nextprev .next').attr('href');
         

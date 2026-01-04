@@ -20,7 +20,7 @@ describe('scraper index integration tests', () => {
   describe('fetchMoviesFromUrl', () => {
     it('should fetch movies from a regular list URL', async () => {
       // Using Letterboxd's official Top 250 list
-      const movies = await fetchMoviesFromUrl(
+      const { items: movies } = await fetchMoviesFromUrl(
         'https://letterboxd.com/dave/list/official-top-250-narrative-feature-films/'
       );
 
@@ -44,7 +44,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from watched movies URL', async () => {
       // Using a public watched movies page
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/pahjay/films');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/pahjay/films');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -60,7 +60,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from actor filmography', async () => {
       // Using Tom Hanks' filmography
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/actor/tom-hanks');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/actor/tom-hanks');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -76,7 +76,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from director filmography', async () => {
       // Using Christopher Nolan's filmography
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/director/christopher-nolan');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/director/christopher-nolan');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -90,7 +90,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from writer filmography', async () => {
       // Using Charlie Kaufman's filmography
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/writer/charlie-kaufman');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/writer/charlie-kaufman');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -104,7 +104,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from collections URL', async () => {
       // Using The Dark Knight Collection
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/films/in/the-dark-knight-collection');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/films/in/the-dark-knight-collection');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);
@@ -120,7 +120,7 @@ describe('scraper index integration tests', () => {
 
     it('should fetch movies from popular movies URL', async () => {
       // Using popular movies page
-      const movies = await fetchMoviesFromUrl('https://letterboxd.com/films/popular');
+      const { items: movies } = await fetchMoviesFromUrl('https://letterboxd.com/films/popular');
 
       expect(movies).toBeDefined();
       expect(Array.isArray(movies)).toBe(true);

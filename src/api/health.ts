@@ -22,6 +22,7 @@ interface HealthState {
 
 let currentAppStatus: AppStatus = 'idle';
 let lastRunTime: number | null = null;
+let syncStartTime: number | null = null;
 const startTime = Date.now();
 
 const components: Record<string, ComponentHealth> = {
@@ -33,8 +34,12 @@ const components: Record<string, ComponentHealth> = {
 
 export function setAppStatus(status: AppStatus) {
     currentAppStatus = status;
+    if (status === 'syncing') {
+        syncStartTime = Date.now();
+    }
     if (status === 'idle') {
         lastRunTime = Date.now();
+        syncStartTime = null;
     }
 }
 
@@ -76,14 +81,23 @@ export function startHealthServer(port: number = 3000) {
                    Actually, let's just rely on lastRunTime.
                 */
 
+                // Staleness Check:
+                // If we haven't successfully finished a run in (Interval + Buffer), something is wrong.
+                // This covers:
+                // 1. Scheduler died (IDLE for too long)
+                // 2. Stuck in syncing (SYNCING for too long without finishing)
+                // 3. Valid sync taking too long (User should increase interval in this case)
+                
                 if (lastRunTime) {
                     const timeSinceLastRun = now - lastRunTime;
-                    if (timeSinceLastRun > staleThreshold && currentAppStatus === 'idle') {
+                    if (timeSinceLastRun > staleThreshold) {
                         isStale = true;
                     }
                 } else {
                      // First run handling
                      const timeSinceStart = now - startTime;
+                     
+                     // If we haven't finished the first run within the threshold, we are likely stuck or slow
                      if (timeSinceStart > staleThreshold && !lastRunTime) {
                          isStale = true;
                      }

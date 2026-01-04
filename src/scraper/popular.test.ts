@@ -12,6 +12,11 @@ jest.mock('../util/logger', () => ({
 // Mock the movie module
 jest.mock('./movie');
 
+// Mock retry operation
+jest.mock('../util/retry', () => ({
+    retryOperation: async (op: any) => await op(),
+}));
+
 // Mock global fetch
 global.fetch = jest.fn() as unknown as typeof fetch;
 
@@ -46,7 +51,8 @@ describe('PopularScraper', () => {
 
       // Verify fetch was called with AJAX URL
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/popular/'
+        'https://letterboxd.com/films/ajax/popular/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -72,9 +78,9 @@ describe('PopularScraper', () => {
       const scraper = new PopularScraper('https://letterboxd.com/films/popular', 1);
       await scraper.getMovies();
 
-      // Verify fetch was called with properly formatted AJAX URL
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/popular/'
+        'https://letterboxd.com/films/ajax/popular/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -100,9 +106,9 @@ describe('PopularScraper', () => {
       const scraper = new PopularScraper('https://letterboxd.com/films/ajax/popular/', 1);
       await scraper.getMovies();
 
-      // Should use the URL as-is
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/popular/'
+        'https://letterboxd.com/films/ajax/popular/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -138,7 +144,7 @@ describe('PopularScraper', () => {
       (getMovie as jest.Mock).mockResolvedValue(mockMovie);
 
       const scraper = new PopularScraper('https://letterboxd.com/films/popular', 3);
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(3);
       expect(getMovie).toHaveBeenCalledTimes(3);
@@ -173,7 +179,7 @@ describe('PopularScraper', () => {
       (getMovie as jest.Mock).mockResolvedValue(mockMovie);
 
       const scraper = new PopularScraper('https://letterboxd.com/films/popular', 2);
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(2);
       expect(getMovie).toHaveBeenCalledTimes(2);
@@ -211,7 +217,7 @@ describe('PopularScraper', () => {
       });
 
       const scraper = new PopularScraper('https://letterboxd.com/films/popular');
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(movies).toHaveLength(2);
@@ -225,7 +231,7 @@ describe('PopularScraper', () => {
 
       const scraper = new PopularScraper('https://letterboxd.com/films/popular');
 
-      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch popular movies page: 404');
+      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch page: 404');
     });
   });
 });

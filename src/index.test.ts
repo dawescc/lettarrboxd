@@ -75,15 +75,18 @@ describe('main application logic', () => {
       // Mock Scraper Responses
       (scraperModule.fetchMoviesFromUrl as jest.Mock).mockImplementation(async (url) => {
         if (url === 'https://list-a') {
-          return [{ tmdbId: '100', name: 'Movie 100', tags: [] }];
+          return { items: [{ tmdbId: '100', name: 'Movie 100', tags: [] }], hasErrors: false };
         }
         if (url === 'https://list-b') {
-          return [
-            { tmdbId: '100', name: 'Movie 100', tags: [] }, // Duplicate
-            { tmdbId: '200', name: 'Movie 200', tags: [] }
-          ];
+          return { 
+            items: [
+              { tmdbId: '100', name: 'Movie 100', tags: [] }, // Duplicate
+              { tmdbId: '200', name: 'Movie 200', tags: [] }
+            ],
+            hasErrors: false 
+          };
         }
-        return [];
+        return { items: [], hasErrors: false };
       });
 
       (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
@@ -128,11 +131,14 @@ describe('main application logic', () => {
           sonarr: {}
       });
 
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
-        { tmdbId: '1', name: 'Good Movie', rating: 8.0 },
-        { tmdbId: '2', name: 'Bad Movie', rating: 4.0 },
-        { tmdbId: '3', name: 'Unknown Rating', rating: null }
-      ]);
+      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue({
+        items: [
+          { tmdbId: '1', name: 'Good Movie', rating: 8.0 },
+          { tmdbId: '2', name: 'Bad Movie', rating: 4.0 },
+          { tmdbId: '3', name: 'Unknown Rating', rating: null }
+        ],
+        hasErrors: false
+      });
 
       await run();
 
@@ -158,12 +164,15 @@ describe('main application logic', () => {
           sonarr: {}
       });
 
-      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
-        { tmdbId: '1', name: '90s Movie', publishedYear: 1999 },
-        { tmdbId: '2', name: '2000s Movie', publishedYear: 2005 },
-        { tmdbId: '3', name: 'New Movie', publishedYear: 2024 },
-        { tmdbId: '4', name: 'Unknown Year', publishedYear: null }
-      ]);
+      (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue({
+        items: [
+          { tmdbId: '1', name: '90s Movie', publishedYear: 1999 },
+          { tmdbId: '2', name: '2000s Movie', publishedYear: 2005 },
+          { tmdbId: '3', name: 'New Movie', publishedYear: 2024 },
+          { tmdbId: '4', name: 'Unknown Year', publishedYear: null }
+        ],
+        hasErrors: false
+      });
 
       await run();
 

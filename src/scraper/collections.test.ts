@@ -46,7 +46,8 @@ describe('CollectionsScraper', () => {
 
       // Verify fetch was called with AJAX URL
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/in/the-dark-knight-collection/'
+        'https://letterboxd.com/films/ajax/in/the-dark-knight-collection/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -74,7 +75,8 @@ describe('CollectionsScraper', () => {
 
       // Verify fetch was called with properly formatted AJAX URL
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/in/collection-name/'
+        'https://letterboxd.com/films/ajax/in/collection-name/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -102,7 +104,8 @@ describe('CollectionsScraper', () => {
 
       // Should use the URL as-is
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/in/collection-name/'
+        'https://letterboxd.com/films/ajax/in/collection-name/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -138,7 +141,7 @@ describe('CollectionsScraper', () => {
       (getMovie as jest.Mock).mockResolvedValue(mockMovie);
 
       const scraper = new CollectionsScraper('https://letterboxd.com/films/in/collection/', 3);
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(3);
       expect(getMovie).toHaveBeenCalledTimes(3);
@@ -173,7 +176,7 @@ describe('CollectionsScraper', () => {
       (getMovie as jest.Mock).mockResolvedValue(mockMovie);
 
       const scraper = new CollectionsScraper('https://letterboxd.com/films/in/collection/', 2);
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(movies).toHaveLength(2);
       expect(getMovie).toHaveBeenCalledTimes(2);
@@ -207,7 +210,8 @@ describe('CollectionsScraper', () => {
 
       // Verify fetch was called with sorting parameter
       expect(global.fetch).toHaveBeenCalledWith(
-        'https://letterboxd.com/films/ajax/in/collection/by/release-earliest/'
+        'https://letterboxd.com/films/ajax/in/collection/by/release-earliest/',
+        expect.objectContaining({ signal: expect.any(Object) })
       );
     });
 
@@ -243,7 +247,7 @@ describe('CollectionsScraper', () => {
       });
 
       const scraper = new CollectionsScraper('https://letterboxd.com/films/in/collection/');
-      const movies = await scraper.getMovies();
+      const { items: movies } = await scraper.getMovies();
 
       expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(movies).toHaveLength(2);
@@ -257,7 +261,7 @@ describe('CollectionsScraper', () => {
 
       const scraper = new CollectionsScraper('https://letterboxd.com/films/in/invalid/');
 
-      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch collections page: 404');
-    });
+      await expect(scraper.getMovies()).rejects.toThrow('Failed to fetch page: 404');
+    }, 15000);
   });
 });

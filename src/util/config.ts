@@ -169,6 +169,19 @@ function loadConfig(): Config {
       config.radarr.tags = [...new Set([...currentTags, ...envTags])];
   }
 
+  // --- Safety Warnings ---
+  config.letterboxd.forEach(list => {
+      if (!list.tags || list.tags.length === 0) {
+          logger.warn(`List '${list.url}' has NO tags configured. This reduces safety. If this list fails to scrape, the application may not be able to protect items from deletion. Please add a tag.`);
+      }
+  });
+
+  config.serializd.forEach(list => {
+      if (!list.tags || list.tags.length === 0) {
+          logger.warn(`List '${list.url}' has NO tags configured. This reduces safety. Please add a tag.`);
+      }
+  });
+
   // Sonarr Tags
   if (env.SONARR_TAGS) {
       if (!config.sonarr) {

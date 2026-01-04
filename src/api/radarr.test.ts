@@ -47,7 +47,7 @@ import {
 
   getRootFolder,
   getRootFolderById,
-  ensureTagsAreAvailable,
+
   getAllTags,
   addMovie,
   syncMovies,
@@ -139,49 +139,7 @@ describe('radarr API', () => {
     });
   });
 
-  describe('ensureTagsAreAvailable', () => {
-    it('should return map of existing tags', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [
-          { id: 1, label: 'letterboxd' },
-          { id: 2, label: 'other' },
-        ],
-      });
 
-      const startTags = ['letterboxd', 'other'];
-      const result = await ensureTagsAreAvailable(startTags);
-
-      expect(result.get('letterboxd')).toBe(1);
-      expect(result.get('other')).toBe(2);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/tag');
-      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
-    });
-
-    it('should create missing tags', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [{ id: 1, label: 'existing' }],
-      });
-
-      mockAxiosInstance.post.mockResolvedValueOnce({
-        data: { id: 2, label: 'newtag' },
-      });
-
-      const tags = ['existing', 'newtag'];
-      const result = await ensureTagsAreAvailable(tags);
-
-      expect(result.get('existing')).toBe(1);
-      expect(result.get('newtag')).toBe(2);
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/tag', {
-        label: 'newtag',
-      });
-    });
-
-    it('should handle errors gracefully', async () => {
-        mockAxiosInstance.get.mockRejectedValueOnce(new Error('Network Error'));
-        const result = await ensureTagsAreAvailable(['foo']);
-        expect(result.size).toBe(0);
-    });
-  });
 
   describe('addMovie', () => {
     const mockMovie = {

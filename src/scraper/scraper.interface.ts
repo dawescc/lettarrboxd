@@ -8,10 +8,10 @@ interface Scraper {
      * movie data including titles and TMDB IDs. Handles pagination automatically
      * and applies rate limiting between requests.
      * 
-     * @returns Promise that resolves to an array of movie objects with title and tmdbId
+     * @returns Promise that resolves to an object containing items and an error flag
      * @throws Error if scraping fails or network issues occur
      */
-    getMovies(): Promise<LetterboxdMovie[]>;
+    getMovies(): Promise<{ items: LetterboxdMovie[], hasErrors: boolean }>;
 }
 
 export default Scraper;

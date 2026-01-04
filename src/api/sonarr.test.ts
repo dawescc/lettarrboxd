@@ -40,7 +40,7 @@ jest.mock('../util/retry', () => ({
 }));
 
 import {
-  ensureTagsAreAvailable,
+
   getAllSeries,
   deleteSeries,
   syncSeries,
@@ -57,42 +57,7 @@ describe('sonarr API', () => {
     env.DRY_RUN = false;
   });
 
-  describe('ensureTagsAreAvailable', () => {
-    it('should return map of existing tags', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [
-          { id: 1, label: 'serializd' },
-          { id: 2, label: 'other' },
-        ],
-      });
 
-      const startTags = ['serializd', 'other'];
-      const result = await ensureTagsAreAvailable(startTags);
-
-      expect(result.get('serializd')).toBe(1);
-      expect(result.get('other')).toBe(2);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/v3/tag');
-    });
-
-    it('should create missing tags', async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: [{ id: 1, label: 'existing' }],
-      });
-
-      mockAxiosInstance.post.mockResolvedValueOnce({
-        data: { id: 2, label: 'newtag' },
-      });
-
-      const tags = ['existing', 'newtag'];
-      const result = await ensureTagsAreAvailable(tags);
-
-      expect(result.get('existing')).toBe(1);
-      expect(result.get('newtag')).toBe(2);
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/api/v3/tag', {
-        label: 'newtag',
-      });
-    });
-  });
 
   describe('getSeriesLookup', () => {
     it('should return series info when found', async () => {

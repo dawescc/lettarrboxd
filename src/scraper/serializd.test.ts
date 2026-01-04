@@ -50,23 +50,23 @@ describe('SerializdScraper', () => {
     mockedAxios.get.mockResolvedValue({ data: mockResponse });
 
     const scraper = new SerializdScraper('https://www.serializd.com/user/dawescc/watchlist');
-    const series = await scraper.getSeries();
+    const { items: series } = await scraper.getSeries();
 
     expect(series).toHaveLength(2);
-    expect(series[0]).toEqual({
+    expect(series[0]).toEqual(expect.objectContaining({
       id: 73107,
       name: 'Barry',
       tmdbId: '73107',
       slug: 'barry',
       seasons: []
-    });
-    expect(series[1]).toEqual({
+    }));
+    expect(series[1]).toEqual(expect.objectContaining({
       id: 66732,
       name: 'Stranger Things',
       tmdbId: '66732',
       slug: 'stranger-things',
       seasons: []
-    });
+    }));
 
     expect(mockedAxios.get).toHaveBeenCalledWith(
       expect.stringContaining('https://www.serializd.com/api/user/dawescc/watchlistpage_v2/1'),
@@ -95,7 +95,7 @@ describe('SerializdScraper', () => {
       .mockResolvedValueOnce({ data: mockResponsePage2 });
 
     const scraper = new SerializdScraper('https://www.serializd.com/user/dawescc/watchlist');
-    const series = await scraper.getSeries();
+    const { items: series } = await scraper.getSeries();
 
     expect(series).toHaveLength(2);
     expect(series[0].id).toBe(1);
@@ -143,7 +143,7 @@ describe('SerializdScraper', () => {
     });
 
     const scraper = new SerializdScraper('https://www.serializd.com/user/dawescc/watchlist');
-    const series = await scraper.getSeries();
+    const { items: series } = await scraper.getSeries();
 
     expect(series).toHaveLength(1);
     expect(series[0].seasons).toEqual([1, 2]);

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import Bluebird from 'bluebird';
 import logger from '../util/logger';
 import env from '../util/env';
 import { LetterboxdMovie, ScrapedSeries } from './index';
@@ -36,13 +37,8 @@ export class SerializdScraper {
     private cache: SeasonCache = {};
 
     constructor(private url: string) {
-        // env is a Zod object, we might need to access the underlying data or it might be missing DATA_DIR in the schema?
-        // Assuming DATA_DIR is valid based on previous .env.example reading, but if TS complains, it might not be in the export.
-        // Let's check env.ts content in a sec. For now, use a safe fallback or cast if we are sure.
-        // Based on the lint error: Property 'DATA_DIR' does not exist. 
-        // It means it's likely missing from the Zod schema export.
-        // I will fix env.ts in the next step. For now, let's assume I'll fix it.
-        this.cachePath = path.join((env as any).DATA_DIR || './data', 'serializd_cache.json');
+
+        this.cachePath = path.join(env.DATA_DIR, 'serializd_cache.json');
         this.loadCache();
     }
 
@@ -88,7 +84,8 @@ export class SerializdScraper {
                     headers: {
                         'X-Requested-With': 'serializd_vercel',
                         'User-Agent': 'Mozilla/5.0'
-                    }
+                    },
+                    timeout: 30000
                 });
 
                 if (response.data && response.data.seasons) {
@@ -115,7 +112,7 @@ export class SerializdScraper {
         return seasonNumbers;
     }
 
-    async getSeries(): Promise<ScrapedSeries[]> {
+    async getSeries(): Promise<{ items: ScrapedSeries[], hasErrors: boolean }> {
         logger.info(`Scraping Serializd watchlist: ${this.url}`);
         
         // Extract username from URL
@@ -126,11 +123,13 @@ export class SerializdScraper {
         const username = match[1];
         const baseUrl = `https://www.serializd.com/api/user/${username}/watchlistpage_v2`;
         
-        const items: ScrapedSeries[] = [];
+        const allItems: SerializdItem[] = []; // Intermediate storage
         let page = 1;
         let totalPages = 1;
+        let hasErrors = false;
 
         try {
+
             do {
                 const apiUrl = `${baseUrl}/${page}?sort_by=date_added_desc`;
                 logger.debug(`Fetching Serializd API: ${apiUrl}`);
@@ -140,28 +139,15 @@ export class SerializdScraper {
                         'X-Requested-With': 'serializd_vercel',
                         'Referer': this.url,
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
+                    },
+                    timeout: 30000
                 });
 
                 const data = response.data;
                 totalPages = data.totalPages;
 
                 if (data.items) {
-                    // Process items sequentially to allow for rate-limited fetching if needed
-                    for (const item of data.items) {
-                         let seasons: number[] = [];
-                         if (item.seasonIds && item.seasonIds.length > 0) {
-                             seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
-                         }
-
-                        items.push({
-                            id: item.showId,
-                            name: item.showName,
-                            tmdbId: item.showId.toString(),
-                            slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-                            seasons: seasons
-                        });
-                    }
+                    allItems.push(...data.items);
                 }
 
                 page++;
@@ -172,8 +158,33 @@ export class SerializdScraper {
 
             } while (page <= totalPages);
 
-            logger.debug(`Found ${items.length} series in Serializd watchlist`);
-            return items;
+            logger.debug(`Found ${allItems.length} raw items in Serializd watchlist. resolving details...`);
+
+
+            const seriesPromise = await Bluebird.map(allItems, async (item) => {
+                try {
+                    let seasons: number[] = [];
+                    if (item.seasonIds && item.seasonIds.length > 0) {
+                        seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
+                    }
+
+                    return {
+                        id: item.showId,
+                        name: item.showName,
+                        showId: item.showId,
+                        tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
+                        slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                        seasons: seasons
+                    } as ScrapedSeries;
+                } catch (e: any) {
+                    logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
+                    hasErrors = true;
+                    return null;
+                }
+            }, { concurrency: 5 });
+
+            const validSeries = seriesPromise.filter((s): s is ScrapedSeries => s !== null);
+            return { items: validSeries, hasErrors };
 
         } catch (error) {
             logger.error('Error scraping Serializd:', error as any);

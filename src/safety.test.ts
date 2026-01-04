@@ -54,10 +54,13 @@ describe('Safety Regression Tests', () => {
 
     it('should NOT delete existing items if the source list has partial failures (missing TMDB ID)', async () => {
         // 1. Mock Scraper to return one valid movie and one invalid (missing ID)
-        (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue([
-            { tmdbId: '100', name: 'Valid Movie', tags: [] },
-            { tmdbId: null, name: 'Invalid Movie', tags: [] } // This causes the failure
-        ]);
+        (scraperModule.fetchMoviesFromUrl as jest.Mock).mockResolvedValue({
+            items: [
+                { tmdbId: '100', name: 'Valid Movie', tags: [] },
+                { tmdbId: null, name: 'Invalid Movie', tags: [] } // This causes the failure
+            ],
+            hasErrors: false // Partial failure inside items doesn't mean scraper failed entirely, but processLists checks IDs
+        });
 
         // 2. Mock Radarr Sync to verify input
         (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);
@@ -114,8 +117,11 @@ describe('Safety Regression Tests', () => {
 
         (scraperModule.fetchMoviesFromUrl as jest.Mock).mockImplementation(async (url) => {
             if (url === 'https://failed-list') throw new Error('Fail');
-            if (url === 'https://valid-list') return [{ tmdbId: '999', name: 'Valid', tags: [] }];
-            return [];
+            if (url === 'https://valid-list') return { 
+                items: [{ tmdbId: '999', name: 'Valid', tags: [] }],
+                hasErrors: false
+            };
+            return { items: [], hasErrors: false };
         });
 
         (radarrModule.syncMovies as jest.Mock).mockResolvedValue(undefined);

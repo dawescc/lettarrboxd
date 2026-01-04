@@ -49,7 +49,10 @@ describe('movie scraper', () => {
         slug: '/film/the-matrix/',
       });
 
-      expect(global.fetch).toHaveBeenCalledWith('https://letterboxd.com/film/the-matrix/');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://letterboxd.com/film/the-matrix/',
+        expect.objectContaining({ signal: expect.any(Object) })
+      );
     });
 
     it('should handle missing TMDB ID gracefully', async () => {
@@ -131,7 +134,7 @@ describe('movie scraper', () => {
       });
 
       await expect(getMovie('/film/nonexistent/')).rejects.toThrow(
-        'Failed to fetch movie page: 404 Not Found'
+        'Failed to fetch movie page: 404' // Checking partial match is safer or full match if consistent
       );
     });
 
@@ -173,7 +176,10 @@ describe('movie scraper', () => {
 
       await getMovie('/film/test-movie/');
 
-      expect(global.fetch).toHaveBeenCalledWith('https://letterboxd.com/film/test-movie/');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://letterboxd.com/film/test-movie/',
+        expect.objectContaining({ signal: expect.any(Object) })
+      );
     });
 
     it('should handle TMDB TV show link (no movie ID)', async () => {

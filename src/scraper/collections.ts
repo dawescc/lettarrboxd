@@ -1,37 +1,25 @@
+
 import * as cheerio from 'cheerio';
-import Bluebird from 'bluebird';
-import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
-import { getMovie } from './movie';
+import { LETTERBOXD_BASE_URL } from ".";
 import logger from '../util/logger';
-import Scraper from './scraper.interface';
+import { BaseScraper } from './scraper.base';
 
-export class CollectionsScraper implements Scraper {
-    constructor(private url: string, private take?: number, private strategy?: 'oldest' | 'newest') {}
+export class CollectionsScraper extends BaseScraper {
+    constructor(url: string, take?: number, strategy?: 'oldest' | 'newest') {
+        super(url, take, strategy);
+    }
 
-    async getMovies(): Promise<LetterboxdMovie[]> {
+    protected transformUrl(url: string): string {
         // For oldest strategy, modify the original URL before transforming to AJAX
-        let urlToTransform = this.url;
+        let urlToTransform = url;
 
         if (this.strategy === 'oldest') {
             // Add sorting to the base URL before transforming
             // /films/in/collection/ -> /films/in/collection/by/release-earliest/
-            urlToTransform = this.url.replace(/\/$/, '') + '/by/release-earliest/';
+            urlToTransform = url.replace(/\/$/, '') + '/by/release-earliest/';
         }
 
-        // Transform URL to AJAX endpoint
-        // /films/in/collection-name/ -> /films/ajax/popular/in/collection-name/
-        const processUrl = this.transformToAjaxUrl(urlToTransform);
-
-        const allMovieLinks = await this.getAllMovieLinks(processUrl);
-        const linksToProcess = typeof this.take === 'number' ? allMovieLinks.slice(0, this.take) : allMovieLinks;
-
-        const movies = await Bluebird.map(linksToProcess, link => {
-            return getMovie(link);
-        }, {
-            concurrency: 10
-        });
-
-        return movies;
+        return this.transformToAjaxUrl(urlToTransform);
     }
 
     private transformToAjaxUrl(url: string): string {
@@ -52,35 +40,7 @@ export class CollectionsScraper implements Scraper {
         throw new Error(`Unsupported collections URL format: ${url}`);
     }
 
-    private async getAllMovieLinks(baseUrl: string): Promise<string[]> {
-        let currentUrl: string | null = baseUrl;
-        const allLinks: string[] = [];
-
-        while (currentUrl) {
-            logger.debug(`Fetching collections page: ${currentUrl}`);
-
-            const response = await fetch(currentUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch collections page: ${response.status}`);
-            }
-
-            const html = await response.text();
-            const pageLinks = this.getMovieLinksFromHtml(html);
-            allLinks.push(...pageLinks);
-
-            currentUrl = this.getNextPageUrl(html);
-
-            if (currentUrl) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-
-        logger.debug(`Retrieved ${allLinks.length} links from letterboxd collection.`);
-
-        return allLinks;
-    }
-
-    private getMovieLinksFromHtml(html: string): string[] {
+    protected getMovieLinksFromHtml(html: string): string[] {
         const $ = cheerio.load(html);
         const links: string[] = [];
 
@@ -94,7 +54,7 @@ export class CollectionsScraper implements Scraper {
         return links;
     }
 
-    private getNextPageUrl(html: string): string | null {
+    protected getNextPageUrl(html: string): string | null {
         const $ = cheerio.load(html);
         const nextLink = $('.paginate-nextprev .next').attr('href');
 
@@ -105,3 +65,4 @@ export class CollectionsScraper implements Scraper {
         return null;
     }
 }
+

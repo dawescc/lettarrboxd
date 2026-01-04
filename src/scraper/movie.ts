@@ -9,36 +9,52 @@ import logger from '../util/logger';
 export async function getMovie(link: string): Promise<LetterboxdMovie> {
     const movieUrl = new URL(link, LETTERBOXD_BASE_URL).toString();
     
-    const response = await fetch(movieUrl);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch movie page: ${response.status} ${response.statusText}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+        const response = await fetch(movieUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch movie page: ${response.status} ${response.statusText}`);
+        }
+        
+        const html = await response.text();
+        return extractMovieFromHtml(link, html);
+    } catch (metric: unknown) {
+        clearTimeout(timeoutId);
+        const error = metric as Error;
+        if (error.name === 'AbortError') {
+            throw new Error(`Timeout fetching movie page: ${link}`);
+        }
+        throw error;
     }
-    
-    const html = await response.text();
-    return extractMovieFromHtml(link, html);
 }
 
 function extractMovieFromHtml(slug: string, html: string): LetterboxdMovie {
     const $ = cheerio.load(html);
     
-    const name = extractName($);
+    // Improved extraction with better logging context if needed
+    // but keep it simple as failing one field usually shouldn't kill the whole process 
+    // unless it's critical like ID.
+    
+    const id = extractLetterboxdId($); // Critical
+    const name = extractName($); // Critical
     const tmdbId = extractTmdbId($);
     const imdbId = extractImdbId($);
-    const id = extractLetterboxdId($);
     const year = extractPublishedYear($);
     const rating = extractRating($);
     
-    const letterboxdResult = {
+    return {
         id,
         name,
         imdbId,
         tmdbId,
-        publishedYear: year,
+        publishedYear: year, // Now properly typed as number | null
         rating,
         slug
     };
-
-    return letterboxdResult;
 }
 
 function extractRating($: cheerio.CheerioAPI): number|null {
@@ -51,8 +67,8 @@ function extractRating($: cheerio.CheerioAPI): number|null {
                 return parseFloat(data.aggregateRating.ratingValue);
             }
         }
-    } catch (e) {
-        logger.debug('Failed to parse JSON-LD for rating');
+    } catch (e: unknown) {
+         logger.debug(`Failed to parse JSON-LD for rating: ${(e as Error).message}`);
     }
 
     // Fallback to meta tag (twitter:data2 = "3.5 out of 5")
@@ -68,21 +84,21 @@ function extractRating($: cheerio.CheerioAPI): number|null {
 }
 
 function extractName($: cheerio.CheerioAPI): string {
-    const name = $('.primaryname').first().text().trim();
-    return name;
+    return $('.primaryname').first().text().trim();
 }
 
 function extractTmdbId($: cheerio.CheerioAPI): string|null {
     const tmdbLink = $('a[data-track-action="TMDB"]').attr('href');
     if (!tmdbLink) {
+        // Reduced log level to debug as this is common for TV shows
         logger.debug('Could not find TMDB link. This could happen if there is a TV show in the list.');
         return null;
     }
     
     const tmdbMatch = tmdbLink.match(/\/movie\/(\d+)/);
     if (!tmdbMatch) {
-        logger.debug('Could not extract TMDB ID from link. This could happen because there is a TV show in the list.');
-        return null;
+         logger.debug(`Could not extract TMDB ID from link: ${tmdbLink}`);
+         return null;
     }
     
     return tmdbMatch[1];
@@ -91,13 +107,11 @@ function extractTmdbId($: cheerio.CheerioAPI): string|null {
 function extractImdbId($: cheerio.CheerioAPI): string|null {
     const imdbLink = $('a[href*="imdb.com"]').attr('href');
     if (!imdbLink) {
-        logger.debug('Could not find IMDB link. This could happen if there is a TV show in the list or the movie lacks IMDB data.');
         return null;
     }
     
     const imdbMatch = imdbLink.match(/\/title\/(tt\d+)/);
     if (!imdbMatch) {
-        logger.debug('Could not extract IMDB ID from link. This could happen because of an unexpected IMDB URL format.');
         return null;
     }
     
@@ -122,6 +136,5 @@ function extractPublishedYear($: cheerio.CheerioAPI): number|null {
         }
     }
     
-    logger.debug('Could not extract published year. This could happen if the release date format is unexpected or missing.');
     return null;
 }
