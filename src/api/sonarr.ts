@@ -522,21 +522,29 @@ export async function addSeries(
             logger.warn(`TMDB ID lookup failed/missing for ${item.name} (ID: ${item.tmdbId}). Trying title search...`);
             const candidates = await getSeriesLookupByTitle(item.name);
             
-            // Simple fuzzy match: verify the name roughly matches or year matches
-            // For now, allow exact name match (case insensitive)
+            // Refined Fuzzy Match:
+            // Normalize both strings to alphanumeric lowercase only
+            const normalizeTitle = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const target = normalizeTitle(item.name);
+
             const match = candidates.find(c => {
-               // We could check years here too if we scraped year
-               return c.title.toLowerCase() === item.name.toLowerCase();
+               const candidateTitle = normalizeTitle(c.title);
+               return candidateTitle === target;
             });
 
             if (match) {
                 lookupResult = match;
                 usedMethod = 'title_match';
+            } else {
+                logger.warn(`Series not found in Sonarr via title match: ${item.name}`);
+                if (candidates.length > 0) {
+                    logger.debug(`Potential mis-matches found: ${candidates.map(c => c.title).join(', ')}`);
+                }
             }
         }
 
         if (!lookupResult) {
-            logger.warn(`Could not find series in Sonarr (tried ID and Title): ${item.name}`);
+            // Already logged warning above
             return null;
         }
 

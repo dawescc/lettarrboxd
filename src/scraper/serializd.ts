@@ -33,38 +33,13 @@ interface SeasonCache {
     [key: string]: number;
 }
 
+import SerializdCache from './serializdCache';
+
 export class SerializdScraper {
-    private cachePath: string;
-    private cache: SeasonCache = {};
+    private cache: SerializdCache;
 
     constructor(private url: string) {
-
-        this.cachePath = path.join(env.DATA_DIR, 'serializd_cache.json');
-        this.loadCache();
-    }
-
-    private loadCache() {
-        try {
-            if (fs.existsSync(this.cachePath)) {
-                this.cache = JSON.parse(fs.readFileSync(this.cachePath, 'utf-8'));
-            }
-        } catch (e: any) {
-            logger.warn('Failed to load Serializd cache, starting fresh.', e);
-            this.cache = {};
-        }
-    }
-
-    private saveCache() {
-        try {
-            // Ensure data directory exists
-            const dir = path.dirname(this.cachePath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.cachePath, JSON.stringify(this.cache, null, 2));
-        } catch (e: any) {
-            logger.error('Failed to save Serializd cache:', e);
-        }
+        this.cache = SerializdCache.getInstance();
     }
 
     private async resolveSeasonNumbers(showId: number, seasonIds: number[]): Promise<number[]> {
@@ -72,7 +47,7 @@ export class SerializdScraper {
         let fetchedDetails = false;
 
         // Check if we have all IDs in cache
-        const missingIds = seasonIds.filter(id => this.cache[id.toString()] === undefined);
+        const missingIds = seasonIds.filter(id => this.cache.get(id) === undefined);
 
         if (missingIds.length > 0) {
             logger.debug(`Fetching details for show ${showId} to resolve ${missingIds.length} season IDs...`);
@@ -90,10 +65,11 @@ export class SerializdScraper {
                 });
 
                 if (response.data && response.data.seasons) {
+                    const newMappings: { [key: string]: number } = {};
                     response.data.seasons.forEach(season => {
-                        this.cache[season.id.toString()] = season.seasonNumber;
+                        newMappings[season.id.toString()] = season.seasonNumber;
                     });
-                    this.saveCache();
+                    this.cache.update(newMappings);
                     fetchedDetails = true;
                 }
             } catch (e: any) {
@@ -104,7 +80,7 @@ export class SerializdScraper {
 
         // Map IDs to Numbers
         seasonIds.forEach(id => {
-            const num = this.cache[id.toString()];
+            const num = this.cache.get(id);
             if (num !== undefined) {
                 seasonNumbers.push(num);
             }
