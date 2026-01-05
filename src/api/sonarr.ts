@@ -168,6 +168,19 @@ export async function getSeriesLookup(tmdbId: string): Promise<SonarrLookupResul
     }
 }
 
+
+export async function getSeriesLookupByTitle(title: string): Promise<SonarrLookupResult[]> {
+    try {
+        const response = await axios.get<SonarrLookupResult[]>('/api/v3/series/lookup', {
+            params: { term: title }
+        });
+        return response.data || [];
+    } catch (error) {
+        logger.error(`Error looking up series by title ${title}:`, error as any);
+        return [];
+    }
+}
+
 function configureSeasonMonitoring(
     availableSeasons: SonarrSeason[], 
     targetSeasonNumbers?: number[]
@@ -480,7 +493,7 @@ export async function updateSeries(existingSeries: SonarrSeriesResponse, newTags
     }
 }
 
-async function addSeries(
+export async function addSeries(
     item: ScrapedSeries, 
     qualityProfileId: number, 
     rootFolderPath: string, 
@@ -488,21 +501,52 @@ async function addSeries(
     existingSeriesCache: SonarrSeriesResponse[]
 ): Promise<{ tvdbId: number, wasAdded: boolean } | null> {
     try {
-        if (!item.tmdbId) {
-            logger.warn(`Skipping ${item.name}: No TMDB ID`);
+        let lookupResult: SonarrLookupResult | null = null;
+        let usedMethod = 'tmdb';
+
+        // 1. Try TMDB ID Payload
+        if (item.tmdbId) {
+             // Serializd "tmdbId" is often correct, but sometimes just a serializd ID.
+             // We attempt to lookup by `tmdb:{id}`
+             try {
+                const res = await getSeriesLookup(item.tmdbId);
+                if (res) {
+                    lookupResult = res;
+                    usedMethod = 'tmdb_id';
+                }
+             } catch (ignore) {}
+        }
+
+        // 2. Fallback: Search by Title
+        if (!lookupResult) {
+            logger.warn(`TMDB ID lookup failed/missing for ${item.name} (ID: ${item.tmdbId}). Trying title search...`);
+            const candidates = await getSeriesLookupByTitle(item.name);
+            
+            // Simple fuzzy match: verify the name roughly matches or year matches
+            // For now, allow exact name match (case insensitive)
+            const match = candidates.find(c => {
+               // We could check years here too if we scraped year
+               return c.title.toLowerCase() === item.name.toLowerCase();
+            });
+
+            if (match) {
+                lookupResult = match;
+                usedMethod = 'title_match';
+            }
+        }
+
+        if (!lookupResult) {
+            logger.warn(`Could not find series in Sonarr (tried ID and Title): ${item.name}`);
             return null;
         }
 
-        const lookupResult = await getSeriesLookup(item.tmdbId);
-        if (!lookupResult) {
-            logger.warn(`Could not find series in Sonarr lookup: ${item.name} (TMDB: ${item.tmdbId})`);
-            return null;
+        if (usedMethod === 'title_match') {
+            logger.info(`Found ${item.name} via title match: ${lookupResult.title} (TVDB: ${lookupResult.tvdbId})`);
         }
 
         const tvdbId = lookupResult.tvdbId;
 
-        // Check if it already exists (using the TVDB ID we just found)
-        // We check the cache passed in.
+        // Check if it already exists (using the TVDB ID we found)
         const existingItem = existingSeriesCache.find(s => s.tvdbId === tvdbId);
 
         if (existingItem) {

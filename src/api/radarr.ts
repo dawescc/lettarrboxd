@@ -401,10 +401,22 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
         const response = await axios.post('/api/v3/movie', payload);
         logger.info(`Successfully added movie: ${payload.title}`, response.data);
     } catch (e: any) {
-        if (e.response?.status === 400 && (JSON.stringify(e.response?.data)).includes('This movie has already been added')) {
-            logger.debug(`Movie ${movie.name} already exists in Radarr (API check), skipping`);
+        const isExistsError = e.response?.data && Array.isArray(e.response.data) && e.response.data.some((err: any) => 
+            err.errorCode === 'MovieExistsValidator' || 
+            (err.propertyName === 'TmdbId' && err.errorMessage?.includes('already been added'))
+        );
+
+        if (isExistsError) {
+             logger.debug(`Movie ${movie.name} already exists in Radarr (API check), skipping`);
+             return;
+        }
+        
+        // Fallback to legacy string check just in case
+        if (e.response?.status === 400 && (JSON.stringify(e.response?.data)).includes('already been added')) {
+            logger.debug(`Movie ${movie.name} already exists in Radarr (legacy check), skipping`);
             return;
         }
+
         logger.error(`Error adding movie ${movie.name} (TMDB: ${movie.tmdbId}):`, e as any);
     }
 }
