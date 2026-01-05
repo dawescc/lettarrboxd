@@ -5,7 +5,7 @@ LABEL org.opencontainers.image.source=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.url=https://github.com/dawescc/lettarrboxd
 LABEL org.opencontainers.image.description="Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr."
 LABEL org.opencontainers.image.licenses=MIT
-LABEL org.opencontainers.image.version="2.3.0-beta"
+LABEL org.opencontainers.image.version="2.4.0-beta"
 
 WORKDIR /app
 

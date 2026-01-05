@@ -3,7 +3,7 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
-import Bluebird from 'bluebird';
+import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 
@@ -319,9 +319,9 @@ async function processLibraryCleanup(
 
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
-        await Bluebird.map(moviesToRemove, (movie: any) => {
+        await mapConcurrency(moviesToRemove, (movie: any) => {
             return deleteMovie(movie.id, movie.title);
-        }, { concurrency: 3 });
+        }, 3);
     } else {
         logger.info('No movies to remove.');
     }
@@ -350,9 +350,9 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
 
 
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    await Bluebird.map(movies, async (movie) => {
+    await mapConcurrency(movies, async (movie) => {
         await processMovieSync(movie, context, existingMoviesMap);
-    }, { concurrency: 3 });
+    }, 3);
     logger.info(`Finished processing movies.`);
 
 

@@ -1,10 +1,11 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
-import Bluebird from 'bluebird';
+import { mapConcurrency } from '../util/concurrency';
 import logger from '../util/logger';
 import env from '../util/env';
 import { LetterboxdMovie, ScrapedSeries } from './index';
+import { retryOperation } from '../util/retry';
 
 interface SerializdItem {
     showId: number;
@@ -134,14 +135,16 @@ export class SerializdScraper {
                 const apiUrl = `${baseUrl}/${page}?sort_by=date_added_desc`;
                 logger.debug(`Fetching Serializd API: ${apiUrl}`);
 
-                const response = await axios.get<SerializdResponse>(apiUrl, {
-                    headers: {
-                        'X-Requested-With': 'serializd_vercel',
-                        'Referer': this.url,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    },
-                    timeout: 30000
-                });
+                const response = await retryOperation(async () => {
+                    return await axios.get<SerializdResponse>(apiUrl, {
+                        headers: {
+                            'X-Requested-With': 'serializd_vercel',
+                            'Referer': this.url,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        },
+                        timeout: 30000
+                    });
+                }, `fetch serializd page ${page}`);
 
                 const data = response.data;
                 totalPages = data.totalPages;
@@ -161,7 +164,7 @@ export class SerializdScraper {
             logger.debug(`Found ${allItems.length} raw items in Serializd watchlist. resolving details...`);
 
 
-            const seriesPromise = await Bluebird.map(allItems, async (item) => {
+            const seriesPromise = await mapConcurrency(allItems, async (item) => {
                 try {
                     let seasons: number[] = [];
                     if (item.seasonIds && item.seasonIds.length > 0) {
@@ -181,7 +184,7 @@ export class SerializdScraper {
                     hasErrors = true;
                     return null;
                 }
-            }, { concurrency: 5 });
+            }, 5);
 
             const validSeries = seriesPromise.filter((s): s is ScrapedSeries => s !== null);
             return { items: validSeries, hasErrors };

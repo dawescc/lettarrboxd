@@ -3,7 +3,7 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
-import Bluebird from 'bluebird';
+import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 import { resolveTagsForItems } from '../util/tagHelper';
@@ -406,9 +406,9 @@ async function processLibraryCleanup(
 
     if (seriesToRemove.length > 0) {
         logger.info(`Found ${seriesToRemove.length} series to remove.`);
-        await Bluebird.map(seriesToRemove, (s) => {
+        await mapConcurrency(seriesToRemove, (s: any) => {
             return deleteSeries(s.id, s.title);
-        }, { concurrency: 3 });
+        }, 3);
     } else {
         logger.info('No series to remove.');
     }
@@ -444,11 +444,11 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
 
 
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
-    const results = await Bluebird.map(seriesList, async (item) => {
+    const results = await mapConcurrency(seriesList, async (item) => {
         const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
         if (result) keepTvdbIds.add(result.tvdbId);
         return result;
-    }, { concurrency: 3 });
+    }, 3);
 
     const addedCount = results.filter(r => r && r.wasAdded).length;
     logger.info(`Finished processing series. Added ${addedCount} new series.`);

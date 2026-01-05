@@ -1,10 +1,12 @@
 
-import { processLists } from './index';
-import * as plex from './api/plex';
-import * as health from './api/health';
+import { syncMoviesFromLists } from './index';
+import * as radarr from './api/radarr';
+import * as scraperModule from './scraper';
 import { LetterboxdMovie } from './scraper';
 
 // Mocks
+jest.mock('./api/radarr');
+jest.mock('./scraper');
 jest.mock('./api/plex');
 jest.mock('./api/health');
 jest.mock('./util/logger', () => ({
@@ -35,25 +37,22 @@ describe('Safety Lock Mechanism', () => {
             { url: 'https://letterboxd.com/user/valid-list/', tags: ['valid'] } // Succeeds
         ];
 
-        mockFetchItemsFn.mockImplementation(async (list) => {
-            if (list.url.includes('untagged-list')) {
+        const mockFetch = jest.spyOn(scraperModule, 'fetchMoviesFromUrl') as jest.Mock;
+        mockFetch.mockImplementation(async (url: string) => {
+            if (url.includes('untagged-list')) {
                 return { items: [], hasErrors: true };
             }
-            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] }], hasErrors: false };
+            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] } as LetterboxdMovie], hasErrors: false };
         });
 
         // Act
-        await processLists<LetterboxdMovie>(
+        await syncMoviesFromLists(
             lists,
-            'letterboxd',
-            mockFetchItemsFn,
-            mockSyncItemsFn,
-            'movie',
             []
         );
 
         // Assert
-        expect(mockSyncItemsFn).toHaveBeenCalledWith(
+        expect(radarr.syncMovies).toHaveBeenCalledWith(
             expect.anything(), // items
             expect.anything(), // managedTags
             expect.anything(), // unsafeTags
@@ -68,25 +67,22 @@ describe('Safety Lock Mechanism', () => {
             { url: 'https://letterboxd.com/user/valid-list/', tags: ['valid'] } // Succeeds
         ];
 
-        mockFetchItemsFn.mockImplementation(async (list) => {
-            if (list.url.includes('tagged-list')) {
+        const mockFetch = jest.spyOn(scraperModule, 'fetchMoviesFromUrl') as jest.Mock;
+        mockFetch.mockImplementation(async (url: string) => {
+            if (url.includes('tagged-list')) {
                 return { items: [], hasErrors: true };
             }
-            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] }], hasErrors: false };
+            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] } as LetterboxdMovie], hasErrors: false };
         });
 
         // Act
-        await processLists<LetterboxdMovie>(
+        await syncMoviesFromLists(
             lists,
-            'letterboxd',
-            mockFetchItemsFn,
-            mockSyncItemsFn,
-            'movie',
             []
         );
 
         // Assert
-        expect(mockSyncItemsFn).toHaveBeenCalledWith(
+        expect(radarr.syncMovies).toHaveBeenCalledWith(
             expect.anything(),
             expect.anything(),
             expect.any(Set),
@@ -94,7 +90,7 @@ describe('Safety Lock Mechanism', () => {
         );
         
         // Verify the tag was marked unsafe
-        const unsafeTags = mockSyncItemsFn.mock.calls[0][2];
+        const unsafeTags = (radarr.syncMovies as jest.Mock).mock.calls[0][2];
         expect(unsafeTags.has('my-safe-tag')).toBe(true);
     });
 
@@ -122,25 +118,22 @@ describe('Safety Lock Mechanism', () => {
             { url: 'https://letterboxd.com/user/valid-list/', tags: ['valid'] }
         ];
 
-        mockFetchItemsFn.mockImplementation(async (list) => {
-            if (list.url.includes('untagged-bad-items')) {
+        const mockFetch = jest.spyOn(scraperModule, 'fetchMoviesFromUrl') as jest.Mock;
+        mockFetch.mockImplementation(async (url: string) => {
+            if (url.includes('untagged-bad-items')) {
                 return { items: [{ name: 'Bad Movie', tmdbId: null }], hasErrors: false };
             }
-            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] }], hasErrors: false };
+            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] } as LetterboxdMovie], hasErrors: false };
         });
 
         // Act
-        await processLists<LetterboxdMovie>(
+        await syncMoviesFromLists(
             mixedLists,
-            'letterboxd',
-            mockFetchItemsFn,
-            mockSyncItemsFn,
-            'movie',
             []
         );
 
         // Assert
-        expect(mockSyncItemsFn).toHaveBeenCalledWith(
+        expect(radarr.syncMovies).toHaveBeenCalledWith(
             expect.anything(),
             expect.anything(),
             expect.anything(),
@@ -155,32 +148,29 @@ describe('Safety Lock Mechanism', () => {
             { url: 'https://letterboxd.com/user/valid-list/', tags: ['valid'] }
         ];
 
-        mockFetchItemsFn.mockImplementation(async (list) => {
-            if (list.url.includes('tagged-bad-items')) {
+        const mockFetch = jest.spyOn(scraperModule, 'fetchMoviesFromUrl') as jest.Mock;
+        mockFetch.mockImplementation(async (url: string) => {
+            if (url.includes('tagged-bad-items')) {
                 return { items: [{ name: 'Bad Movie', tmdbId: null }], hasErrors: false };
             }
-            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] }], hasErrors: false };
+            return { items: [{ name: 'Good Movie', tmdbId: '123', tags: ['valid'] } as LetterboxdMovie], hasErrors: false };
         });
 
         // Act
-        await processLists<LetterboxdMovie>(
+        await syncMoviesFromLists(
             lists,
-            'letterboxd',
-            mockFetchItemsFn,
-            mockSyncItemsFn,
-            'movie',
             []
         );
 
         // Assert
-        expect(mockSyncItemsFn).toHaveBeenCalledWith(
+        expect(radarr.syncMovies).toHaveBeenCalledWith(
             expect.anything(),
             expect.anything(),
             expect.any(Set),
             false // abortCleanup MUST BE FALSE
         );
 
-        const unsafeTags = mockSyncItemsFn.mock.calls[0][2];
+        const unsafeTags = (radarr.syncMovies as jest.Mock).mock.calls[0][2];
         expect(unsafeTags.has('safe-tag')).toBe(true);
     });
 });

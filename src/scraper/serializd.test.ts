@@ -22,6 +22,11 @@ jest.mock('fs', () => ({
 }));
 import fs from 'fs';
 
+// Mock retry
+jest.mock('../util/retry', () => ({
+  retryOperation: jest.fn(async (fn) => await fn()),
+}));
+
 describe('SerializdScraper', () => {
   beforeEach(() => {
     jest.clearAllMocks();

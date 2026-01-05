@@ -1,7 +1,7 @@
 
 import Axios, { AxiosInstance } from 'axios';
 import { loadConfig } from '../util/config';
-import Bluebird from 'bluebird';
+import { mapConcurrency } from '../util/concurrency';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
@@ -276,7 +276,7 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
     
     const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; // Hardcoded but aligns with our constants
 
-    await Bluebird.map(items, async (item) => {
+    await mapConcurrency(items, async (item) => {
         if (!item.tmdbId) return;
 
         const itemTags = item.tags || [];
@@ -298,5 +298,5 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
         } catch (e: any) {
             logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
         }
-    }, { concurrency: 5 });
+    }, 5);
 }

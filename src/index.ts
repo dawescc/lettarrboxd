@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-import Bluebird from 'bluebird';
+import { mapConcurrency } from './util/concurrency';
 import env from './util/env';
 import config, { loadConfig } from './util/config';
 import logger from './util/logger';
@@ -60,37 +60,27 @@ function scheduleNextRun() {
 }
 
 /**
- * Generic function to process a collection of lists (Movies or Series)
+ * Process Movie Lists (Letterboxd -> Radarr)
  */
-export async function processLists<T extends ScrapedMedia>(
+export async function syncMoviesFromLists(
     lists: BaseListConfig[],
-    componentName: string, // 'letterboxd' or 'serializd'
-    fetchItemsFn: (list: BaseListConfig) => Promise<{ items: T[], hasErrors: boolean }>,
-    syncItemsFn: (items: T[], managedTags: Set<string>, unsafeTags: Set<string>, abortCleanup: boolean) => Promise<void>,
-    plexType: 'movie' | 'show',
     plexGlobalTags: string[]
 ) {
     if (lists.length === 0) {
-        updateComponentStatus(componentName, 'disabled');
+        updateComponentStatus('letterboxd', 'disabled');
         return;
     }
 
-    // Collect managed tags (safely)
-    // If a list fails to fetch, we MUST NOT include its tags in 'managedTags'.
-    // Furthermore, if a tag is shared between a successful list and a failed list, 
-    // we must treat it as "unsafe to delete" because we don't know the status of items in the failed list.
     const potentialManagedTags = new Set<string>();
     const unsafeTags = new Set<string>();
-
     let hasError = false;
-    let abortCleanup = false; // Safety Lock
+    let abortCleanup = false;
 
-    const allItems = new Map<string, T>(); // TMDB ID -> Item
+    const allItems = new Map<string, LetterboxdMovie>(); // TMDB ID -> Movie
 
-    logger.info(`Processing ${lists.length} ${componentName} lists...`);
+    logger.info(`Processing ${lists.length} Letterboxd lists...`);
 
-
-    await Bluebird.map(lists, async (list) => {
+    await mapConcurrency(lists, async (list) => {
         if (!isListActive(list)) {
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
@@ -98,130 +88,15 @@ export async function processLists<T extends ScrapedMedia>(
 
         try {
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            const { items, hasErrors: listHasErrors } = await fetchItemsFn(list);
             
-            if (listHasErrors) {
-                logger.warn(`List ${list.url} reported partial errors. Marking associated tags as UNSAFE to prevent data loss.`);
-                if (list.tags && list.tags.length > 0) {
-                    list.tags.forEach(t => unsafeTags.add(t));
-                } else {
-                    // CRITICAL: If a list fails and has NO tags, we cannot know which items are safe to remove.
-                    // We must abort the entire cleanup process for this component to prevent data loss.
-                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK: Cleanup will be aborted.`);
-                    abortCleanup = true;
-                }
-                hasError = true;
-            }
-
-
-            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
-
-            for (const item of items) {
-                if (!item.tmdbId) {
-                    logger.warn(`Item '${item.name}' in list ${list.url} is missing a TMDB ID. Marking list tags as unsafe.`);
-                    // Mark tags as UNSAFE to prevent deletion of existing items with these tags
-                    if (list.tags && list.tags.length > 0) {
-                        list.tags.forEach(t => unsafeTags.add(t));
-                    } else {
-                         // Same logic: If items are missing IDs and list has no tags, we can't trust the state.
-                         logger.error(`List ${list.url} has items without IDs and NO tags. Activating SAFETY LOCK.`);
-                         abortCleanup = true;
-                    }
-                    continue;
-                }
-
-
-                if (allItems.has(item.tmdbId)) {
-                    const existing = allItems.get(item.tmdbId)!;
-                    const existingTags = existing.tags || [];
-                    const newTags = list.tags || [];
-                    existing.tags = [...new Set([...existingTags, ...newTags])];
-                    
-                    // Priority: Last list wins for quality profile (simplified logic)
-                    if (list.qualityProfile) {
-                        existing.qualityProfile = list.qualityProfile;
-                    }
-                } else {
-                    item.tags = [...(list.tags || [])];
-                    if (list.qualityProfile) {
-                        item.qualityProfile = list.qualityProfile;
-                    }
-                    allItems.set(item.tmdbId, item);
-                }
-            }
-            logger.info(`Fetched ${items.length} items from list (${list.url}).`);
-        } catch (e: any) {
-            logger.error(`Error fetching list ${list.url}:`, e);
-            hasError = true;
-
-            if (list.tags && list.tags.length > 0) {
-                list.tags.forEach(t => unsafeTags.add(t));
-            } else {
-                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
-                abortCleanup = true;
-            }
-        }
-    }, { concurrency: 5 });
-
-    // Calculate final safe-to-manage tags
-    // managedTags = potentialManagedTags - unsafeTags
-    const managedTags = new Set<string>();
-    potentialManagedTags.forEach(t => {
-        if (!unsafeTags.has(t)) {
-            managedTags.add(t);
-        } else {
-            logger.warn(`Tag '${t}' is present in a list with failures or missing IDs. It will be preserved on all items to ensure safety.`);
-        }
-    });
-
-    const uniqueItems = Array.from(allItems.values());
-
-    if (uniqueItems.length > 0) {
-        const targetComponent = componentName === 'letterboxd' ? 'radarr' : 'sonarr';
-        updateComponentStatus(componentName, hasError ? 'error' : 'ok', `Found ${uniqueItems.length} unique items`);
-        logger.info(`Total unique items found across all ${componentName} lists: ${uniqueItems.length}`);
-        
-        try {
-
-            await syncItemsFn(uniqueItems, managedTags, unsafeTags, abortCleanup);
-            updateComponentStatus(targetComponent, 'ok');
+            // Letterboxd Fetcher + Filter Logic
+            const { items: movies, hasErrors: listHasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
             
-
-            const allPlexTags = [...plexGlobalTags, componentName === 'letterboxd' ? TAG_LETTERBOXD : TAG_SERIALIZD];
-            
-            // Collect Managed Tags for Plex (Global + List Specific)
-            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
-            
-            await plex.syncPlexTags(uniqueItems, allPlexTags, plexManagedTags, plexType);
-        } catch (e: any) {
-            updateComponentStatus(targetComponent, 'error', e.message);
-            throw e; 
-        }
-    } else {
-        if (hasError) {
-             updateComponentStatus(componentName, 'error', 'Failed to fetch any items');
-        } else {
-             updateComponentStatus(componentName, 'ok', 'No items found in lists');
-        }
-    }
-}
-
-export async function run() {
-    // Reload config on every run to support dynamic updates (e.g. adding new lists)
-    const currentConfig = loadConfig();
-
-
-    await processLists<LetterboxdMovie>(
-        currentConfig.letterboxd,
-        'letterboxd',
-        async (list) => {
-            // Letterboxd Fetcher + Filter
-            const { items: movies, hasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
-            
-            // Apply Filters
+            // Apply Filters (Specific to Movies)
+            let filteredMovies = movies;
             if (list.filters) {
                 const initialCount = movies.length;
-                const filteredMovies = movies.filter(movie => {
+                filteredMovies = movies.filter(movie => {
                     const { minRating, minYear, maxYear } = list.filters!;
                     
                     if (minRating !== undefined && (movie.rating === undefined || movie.rating === null || movie.rating < minRating)) return false;
@@ -235,27 +110,234 @@ export async function run() {
                 if (excludedCount > 0) {
                     logger.info(`Filtered ${excludedCount} items from list ${list.url} based on configuration.`);
                 }
-                
-                return { items: filteredMovies, hasErrors }; // Propagate errors even if filtering happened
             }
-            return { items: movies, hasErrors };
-        },
-        (items, managedTags, unsafeTags, abortCleanup) => syncMovies(items, managedTags, unsafeTags, abortCleanup),
-        'movie',
+
+            if (listHasErrors) {
+                logger.warn(`List ${list.url} reported partial errors. Marking associated tags as UNSAFE.`);
+                if (list.tags && list.tags.length > 0) {
+                    list.tags.forEach(t => unsafeTags.add(t));
+                } else {
+                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK.`);
+                    abortCleanup = true;
+                }
+                hasError = true;
+            }
+
+            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
+
+            for (const movie of filteredMovies) {
+                if (!movie.tmdbId) {
+                    logger.warn(`Movie '${movie.name}' missing TMDB ID. Marking tags unsafe.`);
+                    if (list.tags && list.tags.length > 0) {
+                        list.tags.forEach(t => unsafeTags.add(t));
+                    } else {
+                         logger.error(`List ${list.url} has items without IDs and NO tags. Activating SAFETY LOCK.`);
+                         abortCleanup = true;
+                    }
+                    continue;
+                }
+
+                if (allItems.has(movie.tmdbId)) {
+                    const existing = allItems.get(movie.tmdbId)!;
+                    const existingTags = existing.tags || [];
+                    const newTags = list.tags || [];
+                    existing.tags = [...new Set([...existingTags, ...newTags])];
+                    
+                    if (list.qualityProfile) {
+                        existing.qualityProfile = list.qualityProfile;
+                    }
+                } else {
+                    movie.tags = [...(list.tags || [])];
+                    if (list.qualityProfile) {
+                        movie.qualityProfile = list.qualityProfile;
+                    }
+                    allItems.set(movie.tmdbId, movie);
+                }
+            }
+            logger.info(`Fetched ${filteredMovies.length} movies from list (${list.url}).`);
+
+        } catch (e: any) {
+            logger.error(`Error fetching list ${list.url}:`, e);
+            hasError = true;
+            if (list.tags && list.tags.length > 0) {
+                list.tags.forEach(t => unsafeTags.add(t));
+            } else {
+                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
+                abortCleanup = true;
+            }
+        }
+    }, 5);
+
+    // Calculate Managed Tags
+    const managedTags = new Set<string>();
+    potentialManagedTags.forEach(t => {
+        if (!unsafeTags.has(t)) {
+            managedTags.add(t);
+        } else {
+            logger.warn(`Tag '${t}' is present in a failed list. It will be protected from cleanup.`);
+        }
+    });
+
+    const uniqueMovies = Array.from(allItems.values());
+
+    if (uniqueMovies.length > 0) {
+        updateComponentStatus('letterboxd', hasError ? 'error' : 'ok', `Found ${uniqueMovies.length} unique movies`);
+        logger.info(`Total unique movies found: ${uniqueMovies.length}`);
+        
+        try {
+            await syncMovies(uniqueMovies, managedTags, unsafeTags, abortCleanup);
+            updateComponentStatus('radarr', 'ok');
+            
+            const allPlexTags = [...plexGlobalTags, TAG_LETTERBOXD];
+            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
+            
+            await plex.syncPlexTags(uniqueMovies, allPlexTags, plexManagedTags, 'movie');
+        } catch (e: any) {
+            updateComponentStatus('radarr', 'error', e.message);
+            throw e; 
+        }
+    } else {
+        if (hasError) {
+             updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
+        } else {
+             updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
+        }
+    }
+}
+
+/**
+ * Process TV Show Lists (Serializd -> Sonarr)
+ */
+export async function syncShowsFromLists(
+    lists: BaseListConfig[],
+    plexGlobalTags: string[]
+) {
+    if (lists.length === 0) {
+        updateComponentStatus('serializd', 'disabled');
+        return;
+    }
+
+    const potentialManagedTags = new Set<string>();
+    const unsafeTags = new Set<string>();
+    let hasError = false;
+    let abortCleanup = false;
+
+    const allItems = new Map<string, ScrapedSeries>(); // ShowID -> Series
+
+    logger.info(`Processing ${lists.length} Serializd lists...`);
+
+    await mapConcurrency(lists, async (list) => {
+        if (!isListActive(list)) {
+            logger.info(`Skipping inactive list: ${list.id || list.url}`);
+            return;
+        }
+
+        try {
+            logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            
+            // Serializd Fetcher
+            const scraper = new SerializdScraper(list.url);
+            const { items: shows, hasErrors: listHasErrors } = await scraper.getSeries();
+
+            if (listHasErrors) {
+                logger.warn(`List ${list.url} reported partial errors. Marking tags UNSAFE.`);
+                if (list.tags && list.tags.length > 0) {
+                    list.tags.forEach(t => unsafeTags.add(t));
+                } else {
+                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK.`);
+                    abortCleanup = true;
+                }
+                hasError = true;
+            }
+
+            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
+
+            for (const show of shows) {
+                 // Serializd doesn't always have TMDB IDs in the same way, but we use showId
+                 const key = show.tmdbId || show.id.toString();
+
+                 if (allItems.has(key)) {
+                    const existing = allItems.get(key)!;
+                    const existingTags = existing.tags || [];
+                    const newTags = list.tags || [];
+                    existing.tags = [...new Set([...existingTags, ...newTags])];
+                    
+                    if (list.qualityProfile) {
+                        existing.qualityProfile = list.qualityProfile;
+                    }
+                    
+                    // Merge seasons Logic could go here if needed
+                } else {
+                    show.tags = [...(list.tags || [])];
+                    if (list.qualityProfile) {
+                        show.qualityProfile = list.qualityProfile;
+                    }
+                    allItems.set(key, show);
+                }
+            }
+             logger.info(`Fetched ${shows.length} shows from list (${list.url}).`);
+
+        } catch (e: any) {
+            logger.error(`Error fetching list ${list.url}:`, e);
+            hasError = true;
+            if (list.tags && list.tags.length > 0) {
+                list.tags.forEach(t => unsafeTags.add(t));
+            } else {
+                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
+                abortCleanup = true;
+            }
+        }
+    }, 5);
+
+    const managedTags = new Set<string>();
+    potentialManagedTags.forEach(t => {
+        if (!unsafeTags.has(t)) {
+            managedTags.add(t);
+        } else {
+             logger.warn(`Tag '${t}' is present in a failed list. Protected.`);
+        }
+    });
+
+    const uniqueShows = Array.from(allItems.values());
+
+    if (uniqueShows.length > 0) {
+        updateComponentStatus('serializd', hasError ? 'error' : 'ok', `Found ${uniqueShows.length} unique shows`);
+        logger.info(`Total unique shows found: ${uniqueShows.length}`);
+        
+        try {
+            await syncSeries(uniqueShows, managedTags, unsafeTags, abortCleanup);
+            updateComponentStatus('sonarr', 'ok');
+            
+            const allPlexTags = [...plexGlobalTags, TAG_SERIALIZD];
+            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
+            
+            await plex.syncPlexTags(uniqueShows, allPlexTags, plexManagedTags, 'show');
+        } catch (e: any) {
+            updateComponentStatus('sonarr', 'error', e.message);
+            throw e; 
+        }
+    } else {
+        if (hasError) {
+             updateComponentStatus('serializd', 'error', 'Failed to fetch any shows');
+        } else {
+             updateComponentStatus('serializd', 'ok', 'No shows found in lists');
+        }
+    }
+}
+
+export async function run() {
+    // Reload config on every run
+    const currentConfig = loadConfig();
+
+    // 1. Process Movies
+    await syncMoviesFromLists(
+        currentConfig.letterboxd,
         currentConfig.radarr?.tags || []
     );
 
-
-    await processLists<ScrapedSeries>(
+    // 2. Process Shows
+    await syncShowsFromLists(
         currentConfig.serializd,
-        'serializd',
-        async (list) => {
-            // Serializd Fetcher
-            const scraper = new SerializdScraper(list.url);
-            return await scraper.getSeries();
-        },
-        (items, managedTags, unsafeTags, abortCleanup) => syncSeries(items, managedTags, unsafeTags, abortCleanup), 
-        'show',
         currentConfig.sonarr?.tags || []
     );
   

@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import Bluebird from 'bluebird';
+import { mapConcurrency } from '../util/concurrency';
 import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
 import { getMovie } from './movie';
 import logger from '../util/logger';
@@ -53,7 +53,7 @@ export abstract class BaseScraper implements Scraper {
 
         let hasErrors = false;
 
-        const movies = await Bluebird.map(linksToProcess, async (link) => {
+        const movies = await mapConcurrency(linksToProcess, async (link) => {
             try {
                 return await getMovie(link);
             } catch (e: any) {
@@ -61,9 +61,7 @@ export abstract class BaseScraper implements Scraper {
                 hasErrors = true;
                 return null;
             }
-        }, {
-            concurrency: 10
-        });
+        }, 10);
         
         const validMovies = movies.filter((m): m is LetterboxdMovie => m !== null);
         
