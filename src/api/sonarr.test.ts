@@ -379,6 +379,7 @@ describe('sonarr API', () => {
         );
       });
   
+
       it('should NOT update existing series tags if OVERRIDE_TAGS is disabled and ownership tag is missing', async () => {
         const env = require('../util/env');
         env.OVERRIDE_TAGS = false;
@@ -397,5 +398,63 @@ describe('sonarr API', () => {
   
         expect(mockAxiosInstance.put).not.toHaveBeenCalled();
       });
+
+      it('should delete episode files for unmonitored seasons when REMOVE_MISSING_ITEMS is enabled', async () => {
+        const env = require('../util/env');
+        env.REMOVE_MISSING_ITEMS = true;
+
+        mockAxiosInstance.get.mockImplementation((url, config) => {
+            if (url.includes('/qualityprofile')) return Promise.resolve({ data: [{ id: 2, name: 'HD-1080p' }] });
+            if (url.includes('/rootfolder')) return Promise.resolve({ data: [{ path: '/tv' }] });
+            if (url.includes('/tag')) return Promise.resolve({ data: [{ id: 1, label: 'serializd' }] });
+            if (url === '/api/v3/series') return Promise.resolve({ 
+                data: [{ 
+                    id: 100, 
+                    title: 'Barry', 
+                    tvdbId: 12345, 
+                    tmdbId: 73107, 
+                    seasons: [
+                        { seasonNumber: 1, monitored: true }, 
+                        { seasonNumber: 2, monitored: true }
+                    ] 
+                }] 
+            });
+            if (url === '/api/v3/episodefile') {
+                // Return files for Season 1 (id 10) and Season 2 (id 20)
+                return Promise.resolve({
+                    data: [
+                        { id: 10, seriesId: 100, seasonNumber: 1, path: '/tv/Barry/S01/E01.mkv', size: 1000 },
+                        { id: 20, seriesId: 100, seasonNumber: 2, path: '/tv/Barry/S02/E01.mkv', size: 1000 }
+                    ]
+                });
+            }
+            return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        });
+
+        mockAxiosInstance.put.mockResolvedValue({});
+        mockAxiosInstance.delete.mockResolvedValue({});
+
+        const seriesWithSeasons = [{
+            ...mockSeries[0],
+            seasons: [2] // Only monitor Season 2. Season 1 Should be unmonitored and cleaned up.
+        }];
+
+        await syncSeries(seriesWithSeasons, new Set());
+
+        // 1. Expect Season 1 to be unmonitored
+        expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/series/100', expect.objectContaining({
+            seasons: expect.arrayContaining([
+                expect.objectContaining({ seasonNumber: 1, monitored: false }),
+                expect.objectContaining({ seasonNumber: 2, monitored: true })
+            ])
+        }));
+
+        // 2. Expect file for Season 1 (id 10) to be deleted
+        expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/episodefile/10');
+        
+        // 3. Expect file for Season 2 (id 20) NOT to be deleted
+        expect(mockAxiosInstance.delete).not.toHaveBeenCalledWith('/api/v3/episodefile/20');
+      });
+
   });
 });

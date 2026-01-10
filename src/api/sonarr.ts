@@ -596,6 +596,39 @@ export async function addSeries(
     }
 }
 
+
+export interface SonarrEpisodeFile {
+    id: number;
+    seriesId: number;
+    seasonNumber: number;
+    path: string;
+    size: number;
+}
+
+export async function getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
+    try {
+        const response = await axios.get<SonarrEpisodeFile[]>('/api/v3/episodefile', {
+            params: { seriesId }
+        });
+        return response.data;
+    } catch (error) {
+        logger.error(`Error getting episode files for series ${seriesId}:`, error as any);
+        return [];
+    }
+}
+
+export async function deleteEpisodeFile(episodeFileId: number): Promise<void> {
+    try {
+        if (env.DRY_RUN) {
+            logger.info(`[DRY RUN] Would delete episode file ID: ${episodeFileId}`);
+            return;
+        }
+        await axios.delete(`/api/v3/episodefile/${episodeFileId}`);
+    } catch (error) {
+        logger.error(`Error deleting episode file ${episodeFileId}:`, error as any);
+    }
+}
+
 async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targetSeasons: number[]): Promise<void> {
     try {
         if (!existingSeries || !existingSeries.seasons) return;
@@ -614,18 +647,43 @@ async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targ
         if (needsUpdate) {
             if (env.DRY_RUN) {
                 logger.info(`[DRY RUN] Would update seasons for ${existingSeries.title} to: ${targetSeasons.join(', ')}`);
-                return;
+            } else {
+                logger.info(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
+                const updatePayload = {
+                    ...existingSeries,
+                    seasons: newSeasons
+                };
+
+                await axios.put(`/api/v3/series/${existingSeries.id}`, updatePayload);
             }
-
-            logger.info(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
-            const updatePayload = {
-                ...existingSeries,
-                seasons: newSeasons
-            };
-
-            await axios.put(`/api/v3/series/${existingSeries.id}`, updatePayload);
         }
+
+        // Logic to Cleanup Files for Unmonitored Seasons
+        if (env.REMOVE_MISSING_ITEMS) {
+            // Find seasons that are NOT in targetSeasons (implied unmonitored/removed from list)
+            // Note: targetSeasons contains the seasons present in the source (Serializd)
+            const seasonsToCleanup = existingSeries.seasons
+                .filter(s => !targetSeasons.includes(s.seasonNumber))
+                .map(s => s.seasonNumber);
+
+            if (seasonsToCleanup.length > 0) {
+                 logger.info(`Checking for files to cleanup for unwatched seasons of ${existingSeries.title}: ${seasonsToCleanup.join(', ')}`);
+                 
+                 const episodeFiles = await getEpisodeFiles(existingSeries.id);
+                 const filesToDelete = episodeFiles.filter(f => seasonsToCleanup.includes(f.seasonNumber));
+
+                 if (filesToDelete.length > 0) {
+                     logger.info(`Found ${filesToDelete.length} files to delete for ${existingSeries.title} (Seasons: ${seasonsToCleanup.join(', ')})`);
+                     
+                     for (const file of filesToDelete) {
+                        await deleteEpisodeFile(file.id);
+                     }
+                 }
+            }
+        }
+
     } catch (e: any) {
         logger.error(`Error updating seasons for ${existingSeries.title}:`, e.message);
     }
 }
+
