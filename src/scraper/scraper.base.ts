@@ -55,13 +55,16 @@ export abstract class BaseScraper implements Scraper {
 
         const movies = await mapConcurrency(linksToProcess, async (link) => {
             try {
+                const delay = Math.floor(Math.random() * 1000) + 500;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                
                 return await getMovie(link);
             } catch (e: any) {
                 logger.warn(`Failed to scrape movie ${link}: ${e.message}`);
                 hasErrors = true;
                 return null;
             }
-        }, 10);
+        }, 2);
         
         const validMovies = movies.filter((m): m is LetterboxdMovie => m !== null);
         
