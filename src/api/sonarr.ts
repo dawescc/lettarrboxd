@@ -607,9 +607,15 @@ export interface SonarrEpisodeFile {
 
 export async function getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
     try {
+        if (env.GRANULAR_LOGGING) {
+            logger.info(`[GRANULAR] Starting getEpisodeFiles for seriesId: ${seriesId}`);
+        }
         const response = await axios.get<SonarrEpisodeFile[]>('/api/v3/episodefile', {
             params: { seriesId }
         });
+        if (env.GRANULAR_LOGGING) {
+            logger.info(`[GRANULAR] Finished getEpisodeFiles for seriesId: ${seriesId}. Found ${response.data.length} files.`);
+        }
         return response.data;
     } catch (error) {
         logger.error(`Error getting episode files for series ${seriesId}:`, error as any);
@@ -672,11 +678,20 @@ async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targ
                  const episodeFiles = await getEpisodeFiles(existingSeries.id);
                  const filesToDelete = episodeFiles.filter(f => seasonsToCleanup.includes(f.seasonNumber));
 
+                 if (env.GRANULAR_LOGGING) {
+                     logger.info(`[GRANULAR] ${existingSeries.title}: Total files ${episodeFiles.length}, candidates for delete ${filesToDelete.length}`);
+                 }
+
                  if (filesToDelete.length > 0) {
                      logger.info(`Found ${filesToDelete.length} files to delete for ${existingSeries.title} (Seasons: ${seasonsToCleanup.join(', ')})`);
                      
                      for (const file of filesToDelete) {
-                        await deleteEpisodeFile(file.id);
+                        try {
+                            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Deleting file ${file.id} for ${existingSeries.title}`);
+                            await deleteEpisodeFile(file.id);
+                        } catch (err) {
+                            logger.error(err as any, `Failed to delete file ${file.id}`);
+                        }
                      }
                  }
             }

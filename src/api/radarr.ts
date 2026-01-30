@@ -147,6 +147,8 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
             return;
         }
 
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting deleteMovie for ${title} (${id})`);
+        
         await retryOperation(async () => {
             await axios.delete(`/api/v3/movie/${id}`, {
                 params: {
@@ -156,6 +158,8 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
             });
         }, 'delete movie');
         
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished deleteMovie for ${title} (${id})`);
+
         logger.info(`Successfully deleted movie: ${title}`);
     } catch (error) {
         logger.error(`Error deleting movie ${title} (ID: ${id}):`, error as any);
@@ -319,8 +323,9 @@ async function processLibraryCleanup(
 
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
-        await mapConcurrency(moviesToRemove, (movie: any) => {
-            return deleteMovie(movie.id, movie.title);
+        await mapConcurrency(moviesToRemove, async (movie: any) => {
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${movie.title}`);
+            return await deleteMovie(movie.id, movie.title);
         }, 3);
     } else {
         logger.info('No movies to remove.');

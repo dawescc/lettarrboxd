@@ -1,12 +1,14 @@
 import * as cheerio from 'cheerio';
 import { LETTERBOXD_BASE_URL, LetterboxdMovie } from ".";
 import logger from '../util/logger';
+import env from '../util/env';
 
 /**
  * Obtain details of a movie.
  * @param link - This is the 'data-film-link' property on the movie div in letterboxd.
  */
 export async function getMovie(link: string): Promise<LetterboxdMovie> {
+    if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching movie page: ${link}`);
     const movieUrl = new URL(link, LETTERBOXD_BASE_URL).toString();
     
     const controller = new AbortController();

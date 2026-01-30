@@ -181,7 +181,13 @@ export async function syncMoviesFromLists(
     const uniqueMovies = Array.from(allItems.values());
 
     if (uniqueMovies.length > 0) {
-        updateComponentStatus('letterboxd', hasError ? 'error' : 'ok', `Found ${uniqueMovies.length} unique movies`);
+        // If we found movies, we are "working", even if some lists failed. 
+        // Report OK but include error note in message.
+        const statusMsg = hasError 
+            ? `Found ${uniqueMovies.length} unique movies (some list errors)` 
+            : `Found ${uniqueMovies.length} unique movies`;
+            
+        updateComponentStatus('letterboxd', 'ok', statusMsg);
         logger.info(`Total unique movies found: ${uniqueMovies.length}`);
         
         try {
@@ -301,7 +307,11 @@ export async function syncShowsFromLists(
     const uniqueShows = Array.from(allItems.values());
 
     if (uniqueShows.length > 0) {
-        updateComponentStatus('serializd', hasError ? 'error' : 'ok', `Found ${uniqueShows.length} unique shows`);
+        const statusMsg = hasError
+            ? `Found ${uniqueShows.length} unique shows (some list errors)`
+            : `Found ${uniqueShows.length} unique shows`;
+
+        updateComponentStatus('serializd', 'ok', statusMsg);
         logger.info(`Total unique shows found: ${uniqueShows.length}`);
         
         try {

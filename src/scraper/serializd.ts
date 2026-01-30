@@ -122,6 +122,8 @@ export class SerializdScraper {
                     });
                 }, `fetch serializd page ${page}`);
 
+                if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished fetching Serializd page ${page}`);
+
                 const data = response.data;
                 totalPages = data.totalPages;
 
@@ -139,6 +141,7 @@ export class SerializdScraper {
 
             logger.debug(`Found ${allItems.length} raw items in Serializd watchlist. resolving details...`);
 
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Resolving details for ${allItems.length} items`);
 
             const seriesPromise = await mapConcurrency(allItems, async (item) => {
                 try {

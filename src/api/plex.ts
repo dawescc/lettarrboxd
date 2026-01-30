@@ -114,6 +114,7 @@ async function searchByTitleAndId(
     year?: number,
     type?: 'movie' | 'show'
 ): Promise<string | null> {
+    if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting Plex title search for: ${title} (TMDB: ${tmdbId})`);
     try {
         // Prepare params
         const params: Record<string, any> = {
@@ -174,6 +175,7 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
 
 
     try {
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting syncLabels for Plex key: ${ratingKey}`);
         await retryOperation(async () => {
             // 1. Get existing metadata/labels
             const details = await getPlexClient().get<PlexMediaContainer>(`${url}/library/metadata/${ratingKey}`, {
