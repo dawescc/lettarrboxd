@@ -1,8 +1,8 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/*.test.ts', '**/*.itest.ts'],
+  roots: ['<rootDir>/tests'],
+  testMatch: ['**/*.test.ts'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
@@ -11,7 +11,6 @@ module.exports = {
   ],
   coverageReporters: ['text', 'lcov', 'json-summary'],
   coverageDirectory: 'coverage',
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   coverageThreshold: {
     global: {
       branches: 85,

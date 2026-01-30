@@ -276,9 +276,11 @@ async function processMovieSync(
              if (nextTags.length !== currentSet.size || !nextTags.every((t: any) => currentSet.has(t))) {
                  await updateMovie(existingMovie, nextTags);
              } else {
+                 if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Movie ${movie.name} tags already up to date.`);
                  logger.debug(`Movie ${movie.name} tags already up to date.`);
              }
          } else {
+             if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Skipping update for ${movie.name}: Missing ownership tag.`);
              logger.debug(`Skipping update for ${movie.name}: Missing ownership tag.`);
          }
          return;
@@ -379,10 +381,12 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
         const tmdbId = parseInt(movie.tmdbId);
 
         if (existingMoviesMap && existingMoviesMap.has(tmdbId)) {
+            if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Movie ${movie.name} already in Radarr (cached)`);
             logger.debug(`Movie ${movie.name} already exists in Radarr (cached), skipping`);
             return;
         }
 
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Adding movie to Radarr: ${movie.name}`);
         logger.debug(`Adding movie to Radarr: ${movie.name}`);
 
         const payload: RadarrMovie = {
@@ -404,6 +408,7 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
         }
 
         const response = await axios.post('/api/v3/movie', payload);
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Successfully added movie: ${payload.title}`);
         logger.info(`Successfully added movie: ${payload.title}`, response.data);
     } catch (e: any) {
         const isExistsError = e.response?.data && Array.isArray(e.response.data) && e.response.data.some((err: any) => 
@@ -433,6 +438,7 @@ export async function updateMovie(existingMovie: any, newTags: number[]): Promis
             return;
         }
 
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Updating tags for movie: ${existingMovie.title}`);
         logger.info(`Updating tags for movie: ${existingMovie.title}`);
         const payload = {
             ...existingMovie,
@@ -440,6 +446,7 @@ export async function updateMovie(existingMovie: any, newTags: number[]): Promis
         };
 
         await axios.put(`/api/v3/movie/${existingMovie.id}`, payload);
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished updating tags for movie: ${existingMovie.title}`);
     } catch (e: any) {
         logger.error(`Error updating movie ${existingMovie.title}:`, e as any);
     }

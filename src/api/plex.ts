@@ -175,7 +175,6 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
 
 
     try {
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting syncLabels for Plex key: ${ratingKey}`);
         await retryOperation(async () => {
             // 1. Get existing metadata/labels
             const details = await getPlexClient().get<PlexMediaContainer>(`${url}/library/metadata/${ratingKey}`, {
@@ -191,28 +190,16 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
             
             // OWNERSHIP CHECK
             // We only touch items that have our system label (or if we are about to ADD the system label for the first time, effectively claimed)
-            // Wait, if we are adding it for the first time, existingLabels won't have it.
-            // But if it's a NEW item, managedTags removal is irrelevant (existing is empty or user-only).
-            // Logic:
-            // - If existing contains systemLabel: Full Sync (Add New, Remove Stale Managed)
-            // - If existing does NOT contain systemLabel: Add Only (Don't remove anything, just append targetLabels including systemLabel)
-            
             const hasOwnership = existingLabels.some(l => l.toLowerCase() === systemLabel.toLowerCase());
-            
-            // Normalize for case-insensitive comparison
-            // This is largely handled by calculateNextTags(..., true) now, 
-            // but we still want to ensure deduplication of the final result handles case correctly if needed.
-            // Our helper returns unique strings, but let's trust it.
             
             const finalLabelsArg = calculateNextTags(existingLabels, managedTags, targetLabels, true);
 
             // Verify if update is needed
-            // Sort both for comparison? Or Set logic.
-            // For check, we want case-insensitive comparison of contents.
             const finalSet = new Set(finalLabelsArg.map(l => l.toLowerCase()));
             const existingSet = new Set(existingLabels.map(l => l.toLowerCase()));
             
             if (finalSet.size === existingSet.size && [...finalSet].every(l => existingSet.has(l))) {
+                 if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Plex item ${metadata.title} labels already up to date.`);
                  logger.debug(`[DEBUG] Plex item ${metadata.title} labels already up to date.`);
                  return;
             }
@@ -239,7 +226,7 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
                 headers: { 'X-Plex-Token': token, 'Accept': 'application/json' }
             });
 
-        }, 'sync plex labels');
+        }, `sync plex labels for item ${ratingKey}`);
 
     } catch (error: any) {
         logger.error(`Error syncing labels to Plex item ${ratingKey}:`, error.message);

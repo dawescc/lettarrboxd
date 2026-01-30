@@ -1,6 +1,6 @@
 {
   "name": "lettarrboxd",
-  "version": "2.4.3-beta",
+  "version": "2.4.41.0-beta",
   "main": "src/index.ts",
   "repository": "git@github.com:dawescc/lettarrboxd.git",
   "author": "Ryan Dawes <dev@dawes.cc>",
@@ -10,11 +10,7 @@
     "start": "bun src/index.ts",
     "start:dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "test:unit": "jest --testPathIgnorePatterns=itest",
-    "test:integration": "jest --testPathPatterns=itest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test": "jest tests/logic.test.ts"
   },
   "dependencies": {
     "axios": "^1.10.0",

@@ -1,4 +1,5 @@
 import { TaskQueue } from './queue';
+import { runWithJobId } from './context';
 
 export async function mapConcurrency<T, R>(
     items: T[],
@@ -9,6 +10,9 @@ export async function mapConcurrency<T, R>(
         ? new TaskQueue(concurrencyOrQueue) 
         : concurrencyOrQueue;
 
-    const promises = items.map(item => queue.add(() => fn(item)));
+    const promises = items.map(item => {
+        const jobId = Math.random().toString(36).substring(2, 8);
+        return queue.add(() => runWithJobId(jobId, () => fn(item)), jobId);
+    });
     return Promise.all(promises);
 }

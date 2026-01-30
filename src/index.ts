@@ -86,11 +86,13 @@ export async function syncMoviesFromLists(
 
     await mapConcurrency(lists, async (list) => {
         if (!isListActive(list)) {
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
         }
 
         try {
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
             
             // Letterboxd Fetcher + Filter Logic
@@ -238,11 +240,13 @@ export async function syncShowsFromLists(
 
     await mapConcurrency(lists, async (list) => {
         if (!isListActive(list)) {
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
         }
 
         try {
+            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
             
             // Serializd Fetcher

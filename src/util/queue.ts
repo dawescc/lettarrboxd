@@ -27,26 +27,31 @@ export class TaskQueue {
      * @param task A function that returns a promise.
      * @returns A promise that resolves with the task's result.
      */
-    add<T>(task: () => Promise<T>): Promise<T> {
+    add<T>(task: () => Promise<T>, jobId?: string): Promise<T> {
         return new Promise<T>((resolve, reject) => {
             const runner = async () => {
                 this.running++;
                 try {
+                    if (env.GRANULAR_LOGGING && jobId) logger.info(`[Queue] [${jobId}] Starting task`);
                     const result = await task();
                     this.recordSuccess();
                     resolve(result);
                 } catch (error) {
+                    if (env.GRANULAR_LOGGING && jobId) logger.warn(`[Queue] [${jobId}] Task failed`);
                     this.recordFailure();
                     reject(error);
                 } finally {
+                    if (env.GRANULAR_LOGGING && jobId) logger.info(`[Queue] [${jobId}] Finished`);
                     this.running--;
                     this.next();
                 }
             };
 
             if (this.running < this.concurrency) {
+                if (env.GRANULAR_LOGGING && jobId) logger.info(`[Queue] [${jobId}] Running immediately (Active: ${this.running + 1})`);
                 runner();
             } else {
+                if (env.GRANULAR_LOGGING && jobId) logger.info(`[Queue] [${jobId}] Queued (Position: ${this.queue.length + 1})`);
                 this.queue.push(runner);
             }
         });
