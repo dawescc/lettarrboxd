@@ -1,17 +1,14 @@
+import { TaskQueue } from './queue';
+
 export async function mapConcurrency<T, R>(
     items: T[],
     fn: (item: T) => Promise<R>,
-    concurrency: number
+    concurrencyOrQueue: number | TaskQueue
 ): Promise<R[]> {
-    const results: R[] = new Array(items.length);
-    const iterator = items.entries();
+    const queue = typeof concurrencyOrQueue === 'number' 
+        ? new TaskQueue(concurrencyOrQueue) 
+        : concurrencyOrQueue;
 
-    const workers = Array(Math.min(items.length, concurrency)).fill(null).map(async () => {
-        for (const [index, item] of iterator) {
-            results[index] = await fn(item);
-        }
-    });
-
-    await Promise.all(workers);
-    return results;
+    const promises = items.map(item => queue.add(() => fn(item)));
+    return Promise.all(promises);
 }

@@ -1,11 +1,4 @@
-
-import { addSeries, getSeriesLookup, getSeriesLookupByTitle } from './sonarr'; // We need to export addSeries/getSeriesLookup for testing or test indirectly? 
-// addSeries is not exported in sonarr.ts, it's used by syncSeries.
-// Wait, addSeries IS NOT exported in the file I viewed earlier?
-// Let me check lines 483...
-// "async function addSeries" -> it is NOT exported.
-
-// I can test getSeriesLookup and getSeriesLookupByTitle easily. Use those.
+import { addSeries, getSeriesLookup, getSeriesLookupByTitle } from './sonarr';
 import Axios from 'axios';
 
 // Mock axios
@@ -41,13 +34,10 @@ describe('Sonarr Title Fallback', () => {
     });
 
     it('addSeries should fallback to title search if TMDB ID lookup fails', async () => {
-        // 1. Mock getSeriesLookup (ID) to return null
-        // Since we mock axios, we need to mock the implementation of getSeriesLookup? 
-        // No, getSeriesLookup calls axios. We mock axios.
-        
-        // First call: ID lookup -> returns []
-        // Second call: Title lookup -> returns [{ ... }]
-        // Third call: POST to add
+        // Mock sequence:
+        // 1. ID lookup -> returns empty (Not Found)
+        // 2. Title lookup -> returns match
+        // 3. POST to add series
         
         mockAxiosInstance.get
             .mockResolvedValueOnce({ data: [] }) // ID lookup fails

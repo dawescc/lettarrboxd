@@ -6,6 +6,10 @@ import logger from '../util/logger';
 import Scraper from './scraper.interface';
 import { retryOperation } from '../util/retry';
 
+import { TaskQueue } from '../util/queue';
+
+const networkQueue = new TaskQueue();
+
 export abstract class BaseScraper implements Scraper {
     constructor(
         protected url: string, 
@@ -64,7 +68,7 @@ export abstract class BaseScraper implements Scraper {
                 hasErrors = true;
                 return null;
             }
-        }, 2);
+        }, networkQueue);
         
         const validMovies = movies.filter((m): m is LetterboxdMovie => m !== null);
         

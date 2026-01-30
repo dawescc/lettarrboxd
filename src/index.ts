@@ -62,6 +62,10 @@ function scheduleNextRun() {
 /**
  * Process Movie Lists (Letterboxd -> Radarr)
  */
+import { TaskQueue } from './util/queue';
+
+const listQueue = new TaskQueue();
+
 export async function syncMoviesFromLists(
     lists: BaseListConfig[],
     plexGlobalTags: string[]
@@ -166,7 +170,7 @@ export async function syncMoviesFromLists(
                 abortCleanup = true;
             }
         }
-    }, 5);
+    }, listQueue);
 
     // Calculate Managed Tags
     const managedTags = new Set<string>();
@@ -293,7 +297,7 @@ export async function syncShowsFromLists(
                 abortCleanup = true;
             }
         }
-    }, 5);
+    }, listQueue);
 
     const managedTags = new Set<string>();
     potentialManagedTags.forEach(t => {
