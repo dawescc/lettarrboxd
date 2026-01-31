@@ -60,7 +60,7 @@ export abstract class BaseScraper implements Scraper {
             return async () => {
                 return scraperLimiter.schedule(async () => {
                     try {
-                        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing link ${link} (Active: ${scraperLimiter.counts().EXECUTING})`);
+                        logger.debug(`Processing link ${link} (Active: ${scraperLimiter.counts().EXECUTING})`);
                         return await getMovie(link);
                     } catch (e: any) {
                         logger.warn(`Failed to scrape movie ${link}: ${e.message}`);

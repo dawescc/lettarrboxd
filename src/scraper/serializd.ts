@@ -4,6 +4,7 @@ import path from 'path';
 import { scraperLimiter, itemQueue } from '../util/queues';
 import logger from '../util/logger';
 import env from '../util/env';
+import { scrapeCache } from '../util/cache';
 import { LetterboxdMovie, ScrapedSeries } from './index';
 import { retryOperation } from '../util/retry';
 
@@ -52,19 +53,32 @@ export class SerializdScraper {
         if (missingIds.length > 0) {
             logger.debug(`Fetching details for show ${showId} to resolve ${missingIds.length} season IDs...`);
             try {
-                // Fetch show details
-                // Fetch show details
-                const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
-                    headers: {
-                        'X-Requested-With': 'serializd_vercel',
-                        'User-Agent': 'Mozilla/5.0'
-                    },
-                    timeout: 30000
-                }));
+                // Check Request Cache specific to Serializd API response
+                const cacheKey = `serializd_show_details_${showId}`;
+                let showDetails = scrapeCache.get<SerializdShowDetails>(cacheKey);
 
-                if (response.data && response.data.seasons) {
+                if (!showDetails) {
+                    // Fetch show details
+                    const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
+                        headers: {
+                            'X-Requested-With': 'serializd_vercel',
+                            'User-Agent': 'Mozilla/5.0'
+                        },
+                        timeout: 30000
+                    }));
+                    showDetails = response.data;
+                    
+                    // Cache the successful response
+                    if (showDetails) {
+                        scrapeCache.set(cacheKey, showDetails);
+                    }
+                } else {
+                    logger.debug(`[CACHE HIT] Serializd Show: ${showId}`);
+                }
+
+                if (showDetails && showDetails.seasons) {
                     const newMappings: { [key: string]: number } = {};
-                    response.data.seasons.forEach(season => {
+                    showDetails.seasons.forEach(season => {
                         newMappings[season.id.toString()] = season.seasonNumber;
                     });
                     this.cache.update(newMappings);
@@ -120,7 +134,7 @@ export class SerializdScraper {
                     });
                 }, `fetch serializd page ${page}`);
 
-                if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished fetching Serializd page ${page}`);
+                logger.debug(`Finished fetching Serializd page ${page}`);
 
                 const data = response.data;
                 totalPages = data.totalPages;
@@ -139,7 +153,7 @@ export class SerializdScraper {
 
             logger.debug(`Found ${allItems.length} raw items in Serializd watchlist. resolving details...`);
 
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Resolving details for ${allItems.length} items`);
+            logger.debug(`Resolving details for ${allItems.length} items`);
 
             const seriesPromise = await itemQueue.addAll(allItems.map(item => {
                 return async () => {

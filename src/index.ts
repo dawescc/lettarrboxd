@@ -86,14 +86,14 @@ export async function syncMoviesFromLists(
 
     await Promise.all(lists.map(list => listQueue.add(async () => {
         if (!isListActive(list)) {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
+
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
         }
 
         try {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            logger.debug(`Fetching list: ${list.url}`);
             
             // Letterboxd Fetcher + Filter Logic
             const { items: movies, hasErrors: listHasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
@@ -240,14 +240,14 @@ export async function syncShowsFromLists(
 
     await Promise.all(lists.map(list => listQueue.add(async () => {
         if (!isListActive(list)) {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
+
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return; // Return early for inactive lists
         }
 
         try {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            logger.debug(`Fetching list: ${list.url}`);
             
             // Serializd Fetcher
             const scraper = new SerializdScraper(list.url);
