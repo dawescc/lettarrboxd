@@ -6,7 +6,7 @@ import { LetterboxdMovie } from '../scraper';
 // import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
-import { radarrLimiter } from '../util/queues';
+import { radarrLimiter, itemQueue } from '../util/queues';
 
 import { resolveTagsForItems } from '../util/tagHelper';
 
@@ -327,12 +327,15 @@ async function processLibraryCleanup(
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
         if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${moviesToRemove.length} movies...`);
-        await Promise.all(moviesToRemove.map(movie => 
-            radarrLimiter.schedule(async () => {
-                if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Creating delete task for ${movie.title}`);
-                await deleteMovie(movie.id, movie.title);
-            })
-        ));
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${moviesToRemove.length} movies...`);
+        await itemQueue.addAll(moviesToRemove.map(movie => {
+            return async () => {
+                return radarrLimiter.schedule(async () => {
+                    if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Creating delete task for ${movie.title}`);
+                    await deleteMovie(movie.id, movie.title);
+                });
+            };
+        }));
     } else {
         logger.info('No movies to remove.');
     }
@@ -361,9 +364,11 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
 
 
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    const results = await Promise.all(movies.map(movie => 
-        radarrLimiter.schedule(() => processMovieSync(movie, context, existingMoviesMap))
-    ));
+    const results = await itemQueue.addAll(movies.map(movie => {
+        return async () => {
+            return radarrLimiter.schedule(() => processMovieSync(movie, context, existingMoviesMap));
+        };
+    }));
     logger.info(`Finished processing movies.`);
 
 

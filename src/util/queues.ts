@@ -10,6 +10,13 @@ import Bottleneck from 'bottleneck';
 export const listQueue = new PQueue({ concurrency: 2 });
 
 /**
+ * Item Processing Queue
+ * Limits how many items (movies/shows) are processed concurrently system-wide.
+ * This prevents memory bloat from thousands of pending promises.
+ */
+export const itemQueue = new PQueue({ concurrency: 20 });
+
+/**
  * Radarr Rate Limiter
  * Limits API requests to Radarr to prevent overload.
  * Using Bottleneck for rate limiting.
@@ -35,10 +42,10 @@ export const sonarrLimiter = new Bottleneck({
  * Scraper Rate Limiter
  * Limits requests to Letterboxd/Serializd (if needed).
  * Shared limiter for external scraping.
- * Limit: Max 5 concurrent, min 200ms between requests.
+ * Limit: Min 200ms between requests (approx 5 req/sec). 
+ * No maxConcurrent to allow smooth overlap based on minTime.
  */
 export const scraperLimiter = new Bottleneck({
-    maxConcurrent: 5,
     minTime: 200
 });
 

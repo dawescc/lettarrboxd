@@ -61,7 +61,21 @@ describe('Global Queue Configuration', () => {
         expect(radarrConfig).toBeDefined();
 
         // Find configuration for Scrapers/Plex
-        const scraperConfig = bottleneckCalls.find(call => call[0].maxConcurrent === 5);
+        const scraperConfig = bottleneckCalls.find(call => call[0].minTime === 200 && call[0].maxConcurrent === undefined);
         expect(scraperConfig).toBeDefined();
+    });
+
+    it('should configure itemQueue with concurrency 20', () => {
+        const { itemQueue } = require('../src/util/queues');
+        // PQueue constructor is called. We need to check if the mocked PQueue module was initialized with concurrency 20.
+        // Since we mock PQueue, we need to inspect the calls.
+        
+        // However, we are testing the EXPORTED INSTANCE, which comes from our mock factory or the file execution.
+        // In our mock at the top:
+        // jest.mock('p-queue', () => { return jest.fn().mockImplementation((options) => ... ) });
+        
+        expect(PQueue).toHaveBeenCalledWith(expect.objectContaining({
+            concurrency: 20
+        }));
     });
 });

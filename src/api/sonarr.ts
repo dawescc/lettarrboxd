@@ -7,7 +7,7 @@ import { ScrapedSeries } from '../scraper';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 import { resolveTagsForItems } from '../util/tagHelper';
-import { sonarrLimiter } from '../util/queues';
+import { sonarrLimiter, itemQueue } from '../util/queues';
 
 // Types
 export interface SonarrSeason {
@@ -425,9 +425,11 @@ async function processLibraryCleanup(
 
     if (seriesToRemove.length > 0) {
         logger.info(`Found ${seriesToRemove.length} series to remove.`);
-        await Promise.all(seriesToRemove.map(s => 
-            sonarrLimiter.schedule(() => deleteSeries(s.id, s.title))
-        ));
+        await itemQueue.addAll(seriesToRemove.map(s => {
+            return async () => {
+                return sonarrLimiter.schedule(() => deleteSeries(s.id, s.title));
+            };
+        }));
     } else {
         logger.info('No series to remove.');
     }
@@ -463,13 +465,15 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
 
 
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
-    const results = await Promise.all(seriesList.map(item => 
-        sonarrLimiter.schedule(async () => {
-            const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
-            if (result) keepTvdbIds.add(result.tvdbId);
-            return result;
-        })
-    ));
+    const results = await itemQueue.addAll(seriesList.map(item => {
+        return async () => {
+             return sonarrLimiter.schedule(async () => {
+                const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
+                if (result) keepTvdbIds.add(result.tvdbId);
+                return result;
+             });
+        };
+    }));
 
     const addedCount = results.filter(r => r && r.wasAdded).length;
     logger.info(`Finished processing series. Added ${addedCount} new series.`);

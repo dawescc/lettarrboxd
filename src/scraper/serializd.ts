@@ -1,7 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
-import { scraperLimiter } from '../util/queues';
+import { scraperLimiter, itemQueue } from '../util/queues';
 import logger from '../util/logger';
 import env from '../util/env';
 import { LetterboxdMovie, ScrapedSeries } from './index';
@@ -53,16 +53,14 @@ export class SerializdScraper {
             logger.debug(`Fetching details for show ${showId} to resolve ${missingIds.length} season IDs...`);
             try {
                 // Fetch show details
-                // Rate limit slightly
-                await new Promise(resolve => setTimeout(resolve, 200)); 
-
-                const response = await axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
+                // Fetch show details
+                const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
                     headers: {
                         'X-Requested-With': 'serializd_vercel',
                         'User-Agent': 'Mozilla/5.0'
                     },
                     timeout: 30000
-                });
+                }));
 
                 if (response.data && response.data.seasons) {
                     const newMappings: { [key: string]: number } = {};
@@ -143,29 +141,31 @@ export class SerializdScraper {
 
             if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Resolving details for ${allItems.length} items`);
 
-            const seriesPromise = await Promise.all(allItems.map(item => 
-                scraperLimiter.schedule(async () => {
-                    try {
-                        let seasons: number[] = [];
-                        if (item.seasonIds && item.seasonIds.length > 0) {
-                            seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
-                        }
+            const seriesPromise = await itemQueue.addAll(allItems.map(item => {
+                return async () => {
+                     return scraperLimiter.schedule(async () => {
+                        try {
+                            let seasons: number[] = [];
+                            if (item.seasonIds && item.seasonIds.length > 0) {
+                                seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
+                            }
 
-                        return {
-                            id: item.showId,
-                            name: item.showName,
-                            showId: item.showId,
-                            tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
-                            slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-                            seasons: seasons
-                        } as ScrapedSeries;
-                    } catch (e: any) {
-                        logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
-                        hasErrors = true;
-                        return null;
-                    }
-                })
-            ));
+                            return {
+                                id: item.showId,
+                                name: item.showName,
+                                showId: item.showId,
+                                tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
+                                slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                                seasons: seasons
+                            } as ScrapedSeries;
+                        } catch (e: any) {
+                            logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
+                            hasErrors = true;
+                            return null;
+                        }
+                    });
+                };
+            }));
 
             const validSeries = seriesPromise.filter((s): s is ScrapedSeries => s !== null);
             return { items: validSeries, hasErrors };

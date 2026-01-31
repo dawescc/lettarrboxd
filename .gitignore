@@ -38,6 +38,11 @@ Thumbs.db
 # Logs
 logs
 *.log
+*_logs.txt
+
+# Repro scripts
+repro_*.ts
+debug_*.ts
 
 # Runtime data
 pids

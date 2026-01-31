@@ -1,6 +1,6 @@
 import Axios, { AxiosInstance } from 'axios';
 import { loadConfig } from '../util/config';
-import { plexLimiter } from '../util/queues';
+import { plexLimiter, itemQueue } from '../util/queues';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
@@ -264,29 +264,31 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
     
     const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; 
 
-    await Promise.all(items.map(item => 
-        plexLimiter.schedule(async () => {
-            if (!item.tmdbId) return;
+    await itemQueue.addAll(items.map(item => {
+        return async () => {
+             return plexLimiter.schedule(async () => {
+                if (!item.tmdbId) return;
 
-            const itemTags = item.tags || [];
-            // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
-            const allTags = [...new Set([...itemTags, ...globalTags])];
+                const itemTags = item.tags || [];
+                // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
+                const allTags = [...new Set([...itemTags, ...globalTags])];
 
-            if (allTags.length === 0) return;
+                if (allTags.length === 0) return;
 
-            try {
-                // Pass title, year (if available), and type hint for fallback search
-                const year = (item as any).publishedYear || (item as any).year;
-                
-                const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
+                try {
+                    // Pass title, year (if available), and type hint for fallback search
+                    const year = (item as any).publishedYear || (item as any).year;
+                    
+                    const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
 
-                if (ratingKey) {
-                    // Atomic update
-                    await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
+                    if (ratingKey) {
+                        // Atomic update
+                        await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
+                    }
+                } catch (e: any) {
+                    logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
                 }
-            } catch (e: any) {
-                logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
-            }
-        })
-    ));
+             });
+        };
+    }));
 }
