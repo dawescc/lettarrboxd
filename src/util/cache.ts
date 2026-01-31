@@ -20,6 +20,7 @@ export class RequestCache {
         this.db = new Database(dbPath);
         this.ttl = ttl;
         this.init();
+        this.initSeasonMap();
     }
 
     private init() {
@@ -99,6 +100,75 @@ export class RequestCache {
             this.db.run('VACUUM'); // Reclaim space
         } catch (e: any) {
             logger.error('Failed to clear cache:', e);
+        }
+    }
+
+
+    // --- Season Map (Permanent Cache) ---
+
+    private initSeasonMap() {
+        try {
+            this.db.run(`
+                CREATE TABLE IF NOT EXISTS season_map (
+                    id TEXT PRIMARY KEY,
+                    season_number INTEGER
+                )
+            `);
+            logger.debug('Initialized SQLite season_map table.');
+            
+            // Auto-migrate legacy JSON if it exists
+            this.migrateLegacyJson();
+        } catch (e: any) {
+            logger.error('Failed to initialize season_map table:', e);
+        }
+    }
+
+    private migrateLegacyJson() {
+        const legacyPath = path.join(env.DATA_DIR, 'serializd_cache.json');
+        if (fs.existsSync(legacyPath)) {
+            try {
+                logger.info('Found legacy serializd_cache.json. Migrating to SQLite...');
+                const raw = fs.readFileSync(legacyPath, 'utf-8');
+                const data = JSON.parse(raw);
+                
+                const stmt = this.db.prepare('INSERT OR IGNORE INTO season_map (id, season_number) VALUES (?, ?)');
+                
+                const transaction = this.db.transaction((entries: [string, number][]) => {
+                    for (const [id, num] of entries) {
+                        stmt.run(id, num);
+                    }
+                });
+
+                const entries = Object.entries(data).map(([k, v]) => [k, Number(v)] as [string, number]);
+                transaction(entries);
+                
+                logger.info(`Migrated ${entries.length} season mappings to SQLite.`);
+                
+                // Rename legacy file to .bak to ensure we don't re-read it, but keep backup just in case
+                fs.renameSync(legacyPath, legacyPath + '.bak');
+                logger.info('Renamed legacy cache file to serializd_cache.json.bak');
+                
+            } catch (e: any) {
+                logger.error('Failed to migrate legacy JSON cache:', e);
+            }
+        }
+    }
+
+    public getSeason(seasonId: string | number): number | undefined {
+        try {
+            const row = this.db.query('SELECT season_number FROM season_map WHERE id = ?').get(String(seasonId)) as { season_number: number } | null;
+            return row?.season_number;
+        } catch (e: any) {
+            // logger.warn(`Cache read error for season ${seasonId}:`, e);
+            return undefined;
+        }
+    }
+
+    public setSeason(seasonId: string | number, seasonNumber: number): void {
+        try {
+            this.db.run('INSERT OR REPLACE INTO season_map (id, season_number) VALUES (?, ?)', [String(seasonId), seasonNumber]);
+        } catch (e: any) {
+            logger.warn(`Cache write error for season ${seasonId}:`, e);
         }
     }
 }

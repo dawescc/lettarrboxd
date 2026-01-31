@@ -29,74 +29,72 @@ interface SerializdShowDetails {
     }>;
 }
 
-// Cache format: "SeasonID": SeasonNumber
 interface SeasonCache {
     [key: string]: number;
 }
 
-import SerializdCache from './serializdCache';
 
 export class SerializdScraper {
-    private cache: SerializdCache;
+    private baseUrl: string;
 
     constructor(private url: string) {
-        this.cache = SerializdCache.getInstance();
+        this.baseUrl = url;
     }
 
     private async resolveSeasonNumbers(showId: number, seasonIds: number[]): Promise<number[]> {
         const seasonNumbers: number[] = [];
-        let fetchedDetails = false;
+        let showDetails: SerializdShowDetails | undefined;
 
-        // Check if we have all IDs in cache
-        const missingIds = seasonIds.filter(id => this.cache.get(id) === undefined);
+        for (const seasonId of seasonIds) {
+            // 1. Check permanent cache
+            const cachedSeasonNumber = scrapeCache.getSeason(seasonId);
+            if (cachedSeasonNumber !== undefined) {
+                seasonNumbers.push(cachedSeasonNumber);
+                continue;
+            }
 
-        if (missingIds.length > 0) {
-            logger.debug(`Fetching details for show ${showId} to resolve ${missingIds.length} season IDs...`);
-            try {
-                // Check Request Cache specific to Serializd API response
-                const cacheKey = `serializd_show_details_${showId}`;
-                let showDetails = scrapeCache.get<SerializdShowDetails>(cacheKey);
+            // 2. Fetch details if not in cache (and store using scrapeCache.setSeason)
+            if (!showDetails) {
+                logger.debug(`Fetching details for show ${showId} to resolve season IDs...`);
+                try {
+                    // Check Request Cache specific to Serializd API response
+                    const cacheKey = `serializd_show_details_${showId}`;
+                    showDetails = scrapeCache.get<SerializdShowDetails>(cacheKey);
 
-                if (!showDetails) {
-                    // Fetch show details
-                    const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
-                        headers: {
-                            'X-Requested-With': 'serializd_vercel',
-                            'User-Agent': 'Mozilla/5.0'
-                        },
-                        timeout: 30000
-                    }));
-                    showDetails = response.data;
-                    
-                    // Cache the successful response
-                    if (showDetails) {
-                        scrapeCache.set(cacheKey, showDetails);
+                    if (!showDetails) {
+                        // Fetch show details
+                        const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
+                            headers: {
+                                'X-Requested-With': 'serializd_vercel',
+                                'User-Agent': 'Mozilla/5.0'
+                            },
+                            timeout: 30000
+                        }));
+                        showDetails = response.data;
+                        
+                        // Cache the successful response
+                        if (showDetails) {
+                            scrapeCache.set(cacheKey, showDetails);
+                        }
+                    } else {
+                        logger.debug(`[CACHE HIT] Serializd Show: ${showId}`);
                     }
-                } else {
-                    logger.debug(`[CACHE HIT] Serializd Show: ${showId}`);
+                } catch (e: any) {
+                    logger.error(`Failed to fetch details for show ${showId}:`, e);
+                    // Return what we can, or empty?
+                    continue; // Skip this season if details couldn't be fetched
                 }
+            }
 
-                if (showDetails && showDetails.seasons) {
-                    const newMappings: { [key: string]: number } = {};
-                    showDetails.seasons.forEach(season => {
-                        newMappings[season.id.toString()] = season.seasonNumber;
-                    });
-                    this.cache.update(newMappings);
-                    fetchedDetails = true;
+            if (showDetails && showDetails.seasons) {
+                const season = showDetails.seasons.find(s => s.id === seasonId);
+                if (season) {
+                    // Update permanent cache
+                    scrapeCache.setSeason(seasonId, season.seasonNumber);
+                    seasonNumbers.push(season.seasonNumber);
                 }
-            } catch (e: any) {
-                logger.error(`Failed to fetch details for show ${showId}:`, e);
-                // Return what we can, or empty?
             }
         }
-
-        // Map IDs to Numbers
-        seasonIds.forEach(id => {
-            const num = this.cache.get(id);
-            if (num !== undefined) {
-                seasonNumbers.push(num);
-            }
-        });
 
         return seasonNumbers;
     }

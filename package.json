@@ -1,6 +1,6 @@
 {
   "name": "lettarrboxd",
-  "version": "2.6.2-nightly",
+  "version": "2.6.4-nightly",
   "main": "src/index.ts",
   "repository": "git@github.com:dawescc/lettarrboxd.git",
   "author": "Ryan Dawes <dev@dawes.cc>",
@@ -10,7 +10,8 @@
     "start": "bun src/index.ts",
     "start:dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "bump": "bun scripts/bump.ts"
   },
   "dependencies": {
     "axios": "^1.10.0",
