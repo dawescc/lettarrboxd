@@ -3,10 +3,11 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
-import { mapConcurrency } from '../util/concurrency';
+// import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 import { resolveTagsForItems } from '../util/tagHelper';
+import { sonarrLimiter } from '../util/queues';
 
 // Types
 export interface SonarrSeason {
@@ -424,9 +425,9 @@ async function processLibraryCleanup(
 
     if (seriesToRemove.length > 0) {
         logger.info(`Found ${seriesToRemove.length} series to remove.`);
-        await mapConcurrency(seriesToRemove, (s: any) => {
-            return deleteSeries(s.id, s.title);
-        }, 3);
+        await Promise.all(seriesToRemove.map(s => 
+            sonarrLimiter.schedule(() => deleteSeries(s.id, s.title))
+        ));
     } else {
         logger.info('No series to remove.');
     }
@@ -462,11 +463,13 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
 
 
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
-    const results = await mapConcurrency(seriesList, async (item) => {
-        const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
-        if (result) keepTvdbIds.add(result.tvdbId);
-        return result;
-    }, 3);
+    const results = await Promise.all(seriesList.map(item => 
+        sonarrLimiter.schedule(async () => {
+            const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
+            if (result) keepTvdbIds.add(result.tvdbId);
+            return result;
+        })
+    ));
 
     const addedCount = results.filter(r => r && r.wasAdded).length;
     logger.info(`Finished processing series. Added ${addedCount} new series.`);

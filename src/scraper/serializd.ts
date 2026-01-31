@@ -1,7 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
-import { mapConcurrency } from '../util/concurrency';
+import { scraperLimiter } from '../util/queues';
 import logger from '../util/logger';
 import env from '../util/env';
 import { LetterboxdMovie, ScrapedSeries } from './index';
@@ -143,27 +143,29 @@ export class SerializdScraper {
 
             if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Resolving details for ${allItems.length} items`);
 
-            const seriesPromise = await mapConcurrency(allItems, async (item) => {
-                try {
-                    let seasons: number[] = [];
-                    if (item.seasonIds && item.seasonIds.length > 0) {
-                        seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
-                    }
+            const seriesPromise = await Promise.all(allItems.map(item => 
+                scraperLimiter.schedule(async () => {
+                    try {
+                        let seasons: number[] = [];
+                        if (item.seasonIds && item.seasonIds.length > 0) {
+                            seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
+                        }
 
-                    return {
-                        id: item.showId,
-                        name: item.showName,
-                        showId: item.showId,
-                        tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
-                        slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-                        seasons: seasons
-                    } as ScrapedSeries;
-                } catch (e: any) {
-                    logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
-                    hasErrors = true;
-                    return null;
-                }
-            }, 5);
+                        return {
+                            id: item.showId,
+                            name: item.showName,
+                            showId: item.showId,
+                            tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
+                            slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                            seasons: seasons
+                        } as ScrapedSeries;
+                    } catch (e: any) {
+                        logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
+                        hasErrors = true;
+                        return null;
+                    }
+                })
+            ));
 
             const validSeries = seriesPromise.filter((s): s is ScrapedSeries => s !== null);
             return { items: validSeries, hasErrors };

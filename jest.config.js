@@ -19,4 +19,7 @@ module.exports = {
       statements: 85,
     },
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(p-queue|eventemitter3|p-timeout|yocto-queue)/)',
+  ],
 };

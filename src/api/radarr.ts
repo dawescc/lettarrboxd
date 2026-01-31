@@ -3,9 +3,10 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
-import { mapConcurrency } from '../util/concurrency';
+// import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
+import { radarrLimiter } from '../util/queues';
 
 import { resolveTagsForItems } from '../util/tagHelper';
 
@@ -325,10 +326,13 @@ async function processLibraryCleanup(
 
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
-        await mapConcurrency(moviesToRemove, async (movie: any) => {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${movie.title}`);
-            return await deleteMovie(movie.id, movie.title);
-        }, 3);
+        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${moviesToRemove.length} movies...`);
+        await Promise.all(moviesToRemove.map(movie => 
+            radarrLimiter.schedule(async () => {
+                if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Creating delete task for ${movie.title}`);
+                await deleteMovie(movie.id, movie.title);
+            })
+        ));
     } else {
         logger.info('No movies to remove.');
     }
@@ -357,9 +361,9 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
 
 
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    await mapConcurrency(movies, async (movie) => {
-        await processMovieSync(movie, context, existingMoviesMap);
-    }, 3);
+    const results = await Promise.all(movies.map(movie => 
+        radarrLimiter.schedule(() => processMovieSync(movie, context, existingMoviesMap))
+    ));
     logger.info(`Finished processing movies.`);
 
 

@@ -1,7 +1,6 @@
-
 import Axios, { AxiosInstance } from 'axios';
 import { loadConfig } from '../util/config';
-import { mapConcurrency } from '../util/concurrency';
+import { plexLimiter } from '../util/queues';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
@@ -263,29 +262,31 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
     // Or we update the signature to accept `systemOwnerLabel`.
     // Let's assume 'letterboxd' for movies and 'serializd' for shows based on typeHint.
     
-    const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; // Hardcoded but aligns with our constants
+    const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; 
 
-    await mapConcurrency(items, async (item) => {
-        if (!item.tmdbId) return;
+    await Promise.all(items.map(item => 
+        plexLimiter.schedule(async () => {
+            if (!item.tmdbId) return;
 
-        const itemTags = item.tags || [];
-        // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
-        const allTags = [...new Set([...itemTags, ...globalTags])];
+            const itemTags = item.tags || [];
+            // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
+            const allTags = [...new Set([...itemTags, ...globalTags])];
 
-        if (allTags.length === 0) return;
+            if (allTags.length === 0) return;
 
-        try {
-            // Pass title, year (if available), and type hint for fallback search
-            const year = (item as any).publishedYear || (item as any).year;
-            
-            const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
+            try {
+                // Pass title, year (if available), and type hint for fallback search
+                const year = (item as any).publishedYear || (item as any).year;
+                
+                const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
 
-            if (ratingKey) {
-                // Atomic update
-                await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
+                if (ratingKey) {
+                    // Atomic update
+                    await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
+                }
+            } catch (e: any) {
+                logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
             }
-        } catch (e: any) {
-            logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
-        }
-    }, 5);
+        })
+    ));
 }
