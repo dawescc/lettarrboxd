@@ -29,7 +29,7 @@ function checkCancel(value: unknown) {
 // Helper: Run Command
 async function run(cmd: string, args: string[], s?: ReturnType<typeof spinner>) {
   const fullCmd = `${cmd} ${args.join(" ")}`;
-  
+
   if (IS_DRY_RUN) {
     if (s) s.message(`[DRY RUN] Would execute: ${fullCmd}`);
     else console.log(`[DRY RUN] Would execute: ${fullCmd}`);
@@ -69,53 +69,66 @@ async function main() {
 
   note(`Current Version: ${version}`, "Info");
 
-  // 1. Version Bump
-  const shouldBump = await confirm({
-    message: "Do you want to bump the version?",
-    initialValue: false,
+  // 0. release Mode Support
+  const releaseMode = await select({
+    message: "Release Mode:",
+    options: [
+      { value: "new", label: "New Release", hint: "Bump version & create new tag" },
+      { value: "amend", label: "Roll-in (Amend)", hint: "Update last release (force push)" },
+    ]
   });
-  checkCancel(shouldBump);
-  const bump = Boolean(shouldBump);
+  checkCancel(releaseMode);
+  const isAmend = releaseMode === "amend";
 
-  if (bump) {
-    const [major, minor, patchStr] = version.split(".");
-    const patch = parseInt(patchStr, 10);
-    const nextPatch = !isNaN(patch) ? `${major}.${minor}.${patch + 1}` : version;
-
-    const newVersionInput = await text({
-      message: "Enter new version:",
-      placeholder: nextPatch,
+  // 1. Version Bump (Skip if Amending)
+  if (!isAmend) {
+    const shouldBump = await confirm({
+      message: "Do you want to bump the version?",
+      initialValue: false,
     });
-    checkCancel(newVersionInput);
+    checkCancel(shouldBump);
+    const bump = Boolean(shouldBump);
 
-    const versionString = String(newVersionInput) || nextPatch;
+    if (bump) {
+      const [major, minor, patchStr] = version.split(".");
+      const patch = parseInt(patchStr, 10);
+      const nextPatch = !isNaN(patch) ? `${major}.${minor}.${patch + 1}` : version;
 
-    // Write updates
-    const s = spinner();
-    s.start("Updating files...");
-    
-    // Update package.json
-    pkg.version = versionString;
-    await writeFile(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
-    
-    // Update Dockerfile
-    let dockerfile = fs.readFileSync(DOCKERFILE_PATH, "utf8");
-    const versionRegex = /LABEL org.opencontainers.image.version="([^"]+)"/;
-    if (dockerfile.match(versionRegex)) {
-      dockerfile = dockerfile.replace(versionRegex, `LABEL org.opencontainers.image.version="${versionString}"`);
-      await writeFile(DOCKERFILE_PATH, dockerfile);
+      const newVersionInput = await text({
+        message: "Enter new version:",
+        placeholder: nextPatch,
+      });
+      checkCancel(newVersionInput);
+
+      const versionString = String(newVersionInput) || nextPatch;
+
+      // Write updates
+      const s = spinner();
+      s.start("Updating files...");
+
+      // Update package.json
+      pkg.version = versionString;
+      await writeFile(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
+
+      // Update Dockerfile
+      let dockerfile = fs.readFileSync(DOCKERFILE_PATH, "utf8");
+      const versionRegex = /LABEL org.opencontainers.image.version="([^"]+)"/;
+      if (dockerfile.match(versionRegex)) {
+        dockerfile = dockerfile.replace(versionRegex, `LABEL org.opencontainers.image.version="${versionString}"`);
+        await writeFile(DOCKERFILE_PATH, dockerfile);
+      }
+      s.stop(`Bumped to ${versionString}`);
+      version = versionString;
+      summary.push(`Bumped version from ${pkg.version} to ${versionString}`);
     }
-    s.stop(`Bumped to ${versionString}`);
-    version = versionString;
-    summary.push(`Bumped version from ${pkg.version} to ${versionString}`);
+  } else {
+    note(`Staying on version ${version} (Amend Mode)`, "Info");
   }
 
-  // 3. Channel Selection (Moved up to support commit msg context if needed, but keeping here for flow)
-  // Actually contextually it makes sense to ask channel BEFORE committing? 
-  // User asked: "ask if i want to include tags or not in the commit"
-  // The TAG depends on the channel (e.g. -nightly). 
-  // So we should move Channel Selection UP, before Commit.
-  
+  // 3. Channel Selection
+  // We ask this early to determine if we need to append a pre-release suffix (e.g. -nightly)
+  // which affects both the commit title default and the git tag.
+
   const channel = await select({
     message: "Select Release Channel:",
     options: [
@@ -130,20 +143,19 @@ async function main() {
   // SemVer Pre-release Logic
   let releaseVersion = version;
   if (selectedChannel !== "latest" && !version.includes(`-${selectedChannel}`)) {
-     // If user didn't already type "2.6.6-nightly" manually, we append it for the tag context
-     // But we do NOT update package.json with this ephemeral tag usually, 
-     // unless the user specifically wants the package.json to say "2.6.6-nightly".
-     // For this workflow, let's treat `releaseVersion` as the Git/Docker tag, keeping package.json clean-ish 
-     // OR update it if that's the preference. The user said "include that in the Version Tag itself".
-     
-     // Let's modify the local variable `releaseVersion` to be used for Git Tag and Docker Image Tag.
-     releaseVersion = `${version}-${selectedChannel}`;
-     note(`Pre-release detected. Will tag as: v${releaseVersion}`, "SemVer");
+    // Construct the full release version (e.g. 2.6.8-nightly) for usage in:
+    // 1. Git Tag
+    // 2. Docker Image Tag
+    // Note: We do not update package.json with this strictly transient suffix to avoid noise.
+
+    // Let's modify the local variable `releaseVersion` to be used for Git Tag and Docker Image Tag.
+    releaseVersion = `${version}-${selectedChannel}`;
+    note(`Pre-release detected. Will tag as: v${releaseVersion}`, "SemVer");
   }
 
   // 2. Commit & Tag
   const shouldCommit = await confirm({
-    message: "Create local git commit?",
+    message: isAmend ? "Update last commit (Amend)?" : "Create local git commit?",
     initialValue: true,
   });
   checkCancel(shouldCommit);
@@ -151,168 +163,213 @@ async function main() {
   let tagged = false;
 
   if (shouldCommit) {
-    const commitType = await select({
-      message: "Commit Type:",
-      options: [
-        { value: "chore", label: "chore", hint: "Build/Auxiliary" },
-        { value: "feat", label: "feat", hint: "New Feature" },
-        { value: "fix", label: "fix", hint: "Bug Fix" },
-        { value: "refactor", label: "refactor", hint: "Code Change" },
-        { value: "docs", label: "docs", hint: "Documentation" },
-        { value: "style", label: "style", hint: "Formatting" },
-        { value: "perf", label: "perf", hint: "Performance" },
-        { value: "test", label: "test", hint: "Tests" },
-        { value: "ci", label: "ci", hint: "CI Config" },
-      ],
-    });
-    checkCancel(commitType);
-    const typeStr = String(commitType);
+    let commitMsg = "";
 
-    const defaultTitle = `release v${releaseVersion}`;
-    const commitTitleInput = await text({
-      message: "Commit Title:",
-      placeholder: defaultTitle,
-    });
-    checkCancel(commitTitleInput);
-    
-    const commitTitle = String(commitTitleInput) || defaultTitle;
+    if (isAmend) {
+      // For Amend: Ask if they want to edit the message or keep it
+      const editMsg = await confirm({
+        message: "Edit commit message?",
+        initialValue: false
+      });
+      checkCancel(editMsg);
 
-    // Description Loop
-    const lines: string[] = [];
-    
-    // Initial check
-    let addLine = await confirm({
+      if (!editMsg) {
+        const s = spinner();
+        s.start("Amending commit...");
+        await run("git", ["add", "."], s);
+        await run("git", ["commit", "--amend", "--no-edit"], s);
+        s.stop("Amended commit (no edit)");
+        summary.push("Amended last commit (no message change)");
+
+        // Branch out to avoid running the full wizard
+        // But we still need to handle tagging below
+        commitMsg = "(Amended)"; // placeholder
+      } else {
+        // If editing, fall through to wizard but modify final command
+      }
+    }
+
+    // If NOT amending OR (Amending AND Editing), run wizard
+    if (!isAmend || (isAmend && commitMsg === "")) {
+      const commitType = await select({
+        message: "Commit Type:",
+        options: [
+          { value: "chore", label: "chore", hint: "Build/Auxiliary" },
+          { value: "feat", label: "feat", hint: "New Feature" },
+          { value: "fix", label: "fix", hint: "Bug Fix" },
+          { value: "refactor", label: "refactor", hint: "Code Change" },
+          { value: "docs", label: "docs", hint: "Documentation" },
+          { value: "style", label: "style", hint: "Formatting" },
+          { value: "perf", label: "perf", hint: "Performance" },
+          { value: "test", label: "test", hint: "Tests" },
+          { value: "ci", label: "ci", hint: "CI Config" },
+        ],
+      });
+      checkCancel(commitType);
+      const typeStr = String(commitType);
+
+      const defaultTitle = `release v${releaseVersion}`;
+      const commitTitleInput = await text({
+        message: "Commit Title:",
+        placeholder: defaultTitle,
+      });
+      checkCancel(commitTitleInput);
+
+      const commitTitle = String(commitTitleInput) || defaultTitle;
+
+      // Description Loop
+      const lines: string[] = [];
+
+      // Initial check
+      let addLine = await confirm({
         message: "Add description items (bullet points)?",
         initialValue: false,
-    });
-    checkCancel(addLine);
-    let adding = Boolean(addLine);
+      });
+      checkCancel(addLine);
+      let adding = Boolean(addLine);
 
-    while (adding) {
+      while (adding) {
         const lineInput = await text({
-            message: "Enter Item:",
-            placeholder: "e.g. Added new feature",
+          message: "Enter Item:",
+          placeholder: "e.g. Added new feature",
         });
         checkCancel(lineInput);
-        
+
         const lineStr = String(lineInput);
         if (lineStr) {
-            lines.push(`- ${lineStr}`);
+          lines.push(`- ${lineStr}`);
         }
 
         addLine = await confirm({
-            message: "Add another item?",
-            initialValue: true,
+          message: "Add another item?",
+          initialValue: true,
         });
         checkCancel(addLine);
         adding = Boolean(addLine);
-    }
+      }
 
-    const description = lines.length > 0 ? `\n\n${lines.join("\n")}` : "";
-    const commitMsg = `${typeStr}: ${commitTitle}${description}`;
+      const description = lines.length > 0 ? `\n\n${lines.join("\n")}` : "";
+      const commitMsg = `${typeStr}: ${commitTitle}${description}`;
 
-    // Tag Decision
-    const shouldTag = await confirm({
-        message: `Also tag this commit as v${releaseVersion}?`,
-        initialValue: true
-    });
-    checkCancel(shouldTag);
-
-    const s = spinner();
-    s.start("Committing...");
-    await run("git", ["add", "."], s);
-    await run("git", ["commit", "-m", commitMsg], s);
-    
-    if (shouldTag) {
-        s.message(`Tagging v${releaseVersion}...`);
-        await run("git", ["tag", `v${releaseVersion}`], s);
-        tagged = true;
-    }
-    s.stop("Git operations complete");
-    summary.push(`Created commit "${commitMsg}"`);
-    if (tagged) summary.push(`Tagged v${releaseVersion} locally`);
-  } else {
-      // If we skipped commit, maybe we still want to tag?
-      // User said "Tag this commit", implying if no commit, maybe no tag? 
-      // But let's ask explicitly if commit was skipped.
+      // Tag Decision
       const shouldTag = await confirm({
-          message: `Create git tag v${releaseVersion} (without commit)?`,
-          initialValue: false
+        message: isAmend ? `Force update tag v${releaseVersion}?` : `Also tag this commit as v${releaseVersion}?`,
+        initialValue: true
       });
       checkCancel(shouldTag);
-      if (shouldTag) {
-          await run("git", ["tag", `v${releaseVersion}`]);
-          tagged = true;
-      }
-  }
 
-  // 4. Build & Push
-  const shouldBuild = await confirm({
-    message: `Build & Push to GHCR? (v${releaseVersion} + ${selectedChannel})`,
-    initialValue: true,
-  });
-  checkCancel(shouldBuild);
+      const s = spinner();
 
-  if (shouldBuild) {
-    const s = spinner();
-    s.start("Building multi-arch images (this may take a while)...");
-    
-    // Ensure builder (lazy)
-    if (!IS_DRY_RUN) {
-        try {
-            const check = spawn({ cmd: ["docker", "buildx", "inspect", "mybuilder"], stdout: "ignore", stderr: "ignore" });
-            if ((await check.exited) !== 0) throw new Error();
-            await run("docker", ["buildx", "use", "mybuilder"]);
-        } catch {
-            await run("docker", ["buildx", "create", "--use", "--name", "mybuilder"]);
+      if (isAmend && commitMsg === "(Amended)") {
+        // Verify we don't double commit, we already did it above
+      } else {
+        const op = isAmend ? "Amending..." : "Committing...";
+        s.start(op);
+        await run("git", ["add", "."], s);
+
+        if (isAmend) {
+          await run("git", ["commit", "--amend", "-m", commitMsg], s);
+        } else {
+          await run("git", ["commit", "-m", commitMsg], s);
         }
+      }
+
+      if (shouldTag) {
+        const tagOp = isAmend ? `Force updating tag v${releaseVersion}...` : `Tagging v${releaseVersion}...`;
+        s.message(tagOp);
+
+        if (isAmend) {
+          await run("git", ["tag", "-f", `v${releaseVersion}`], s);
+        } else {
+          await run("git", ["tag", `v${releaseVersion}`], s);
+        }
+        tagged = true;
+      }
+      s.stop("Git operations complete");
+      summary.push(`Created commit "${commitMsg}"`);
+      if (tagged) summary.push(`Tagged v${releaseVersion} locally`);
     }
 
-    await run("docker", ["buildx", "build", 
+    // 4. Build & Push
+    const shouldBuild = await confirm({
+      message: `Build & Push to GHCR? (v${releaseVersion} + ${selectedChannel})`,
+      initialValue: true,
+    });
+    checkCancel(shouldBuild);
+
+    if (shouldBuild) {
+      const s = spinner();
+      s.start("Building multi-arch images (this may take a while)...");
+
+      // Ensure builder (lazy)
+      if (!IS_DRY_RUN) {
+        try {
+          const check = spawn({ cmd: ["docker", "buildx", "inspect", "mybuilder"], stdout: "ignore", stderr: "ignore" });
+          if ((await check.exited) !== 0) throw new Error();
+          await run("docker", ["buildx", "use", "mybuilder"]);
+        } catch {
+          await run("docker", ["buildx", "create", "--use", "--name", "mybuilder"]);
+        }
+      }
+
+      // Get Commit SHA for OCI Labels
+      const shaProc = spawn({ cmd: ["git", "rev-parse", "HEAD"], stdout: "pipe" });
+      const sha = await new Response(shaProc.stdout).text();
+      const cleanSha = sha.trim();
+
+      await run("docker", ["buildx", "build",
         "--platform", "linux/amd64,linux/arm64",
         "--push",
+        "--build-arg", `COMMIT_SHA=${cleanSha}`,
+        "--annotation", "index:org.opencontainers.image.description=Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr.",
         "--tag", `ghcr.io/dawescc/lettarrboxd:${releaseVersion}`, // Specific (e.g. 2.6.6-nightly)
         "--tag", `ghcr.io/dawescc/lettarrboxd:${selectedChannel}`, // Floating (e.g. nightly)
         "."
-    ], s);
-    
-    s.stop("Build & Push complete!");
-    summary.push(`Built and pushed Docker images (tags: v${releaseVersion}, ${selectedChannel})`);
-  }
+      ], s);
 
-  // 5. Git Push
-  let pushMsg = "Push commits to remote?";
-  if (tagged) {
-      pushMsg = `Push git tag (v${releaseVersion}) and commits?`;
-  }
-  
-  const shouldPushGit = await confirm({
-    message: pushMsg,
-    initialValue: true,
-  });
-  checkCancel(shouldPushGit);
-
-  if (shouldPushGit) {
-    const s = spinner();
-    s.start("Pushing to origin...");
-    // Always push commits
-    await run("git", ["push"], s);
-    // Only push tags if we actually tagged something
-    if (tagged) {
-        await run("git", ["push", "--tags"], s);
+      s.stop("Build & Push complete!");
+      summary.push(`Built and pushed Docker images (tags: v${releaseVersion}, ${selectedChannel})`);
     }
-    s.stop("Git sync complete");
-    summary.push("Pushed commits to origin");
-    if (tagged) summary.push(`Pushed tag v${releaseVersion} to origin`);
-  }
 
-  if (IS_DRY_RUN) {
+    // 5. Git Push
+    let pushMsg = isAmend ? "Force push commits to remote?" : "Push commits to remote?";
+    if (tagged) {
+      pushMsg = isAmend
+        ? `Force push tag (v${releaseVersion}) and commits?`
+        : `Push git tag (v${releaseVersion}) and commits?`;
+    }
+
+    const shouldPushGit = await confirm({
+      message: pushMsg,
+      initialValue: true,
+    });
+    checkCancel(shouldPushGit);
+
+    if (shouldPushGit) {
+      const s = spinner();
+      s.start("Pushing to origin...");
+
+      const pushFlags = isAmend ? ["push", "--force"] : ["push"];
+      await run("git", pushFlags, s);
+
+      if (tagged) {
+        // If force pushing tags needed
+        const tagFlags = isAmend ? ["push", "--tags", "--force"] : ["push", "--tags"];
+        await run("git", tagFlags, s);
+      }
+      s.stop("Git sync complete");
+      summary.push("Pushed commits to origin");
+      if (tagged) summary.push(`Pushed tag v${releaseVersion} to origin`);
+    }
+
+    if (IS_DRY_RUN) {
       note(summary.map(s => `[DRY RUN] ${s}`).join("\n"), "Dry Run Summary");
-  } else {
+    } else {
       note(summary.join("\n"), "Release Summary");
-  }
+    }
 
-  outro(`Release v${releaseVersion} completed successfully! 🎉`);
+    outro(`Release v${releaseVersion} completed successfully! 🎉`);
+  }
 }
 
 main().catch(console.error);
