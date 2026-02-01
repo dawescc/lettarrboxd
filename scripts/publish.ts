@@ -75,32 +75,37 @@ async function main() {
   checkCancel(shouldBump);
 
   if (shouldBump) {
+    const [major, minor, patch] = version.split(".").map(Number);
+    const nextPatch = !isNaN(patch) ? `${major}.${minor}.${patch + 1}` : version;
+
     const newVersion = await text({
       message: "Enter new version:",
-      placeholder: "e.g. 2.6.6",
+      placeholder: `e.g. ${nextPatch}`,
       validate(value) {
         if (!value) return "Version is required";
       },
     });
     checkCancel(newVersion);
 
+    const versionString = String(newVersion);
+
     // Write updates
     const s = spinner();
     s.start("Updating files...");
     
     // Update package.json
-    pkg.version = newVersion;
+    pkg.version = versionString;
     await writeFile(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
     
     // Update Dockerfile
     let dockerfile = fs.readFileSync(DOCKERFILE_PATH, "utf8");
     const versionRegex = /LABEL org.opencontainers.image.version="([^"]+)"/;
     if (dockerfile.match(versionRegex)) {
-      dockerfile = dockerfile.replace(versionRegex, `LABEL org.opencontainers.image.version="${newVersion}"`);
+      dockerfile = dockerfile.replace(versionRegex, `LABEL org.opencontainers.image.version="${versionString}"`);
       await writeFile(DOCKERFILE_PATH, dockerfile);
     }
-    s.stop(`Bumped to ${newVersion}`);
-    version = newVersion;
+    s.stop(`Bumped to ${versionString}`);
+    version = versionString;
   }
 
   // 2. Commit
@@ -129,9 +134,25 @@ async function main() {
   });
   checkCancel(channel);
 
+  const selectedChannel = String(channel);
+
+  // SemVer Pre-release Logic
+  let releaseVersion = version;
+  if (selectedChannel !== "latest" && !version.includes(`-${selectedChannel}`)) {
+     // If user didn't already type "2.6.6-nightly" manually, we append it for the tag context
+     // But we do NOT update package.json with this ephemeral tag usually, 
+     // unless the user specifically wants the package.json to say "2.6.6-nightly".
+     // For this workflow, let's treat `releaseVersion` as the Git/Docker tag, keeping package.json clean-ish 
+     // OR update it if that's the preference. The user said "include that in the Version Tag itself".
+     
+     // Let's modify the local variable `releaseVersion` to be used for Git Tag and Docker Image Tag.
+     releaseVersion = `${version}-${selectedChannel}`;
+     note(`Pre-release detected. Will tag as: v${releaseVersion}`, "SemVer");
+  }
+
   // 4. Build & Push
   const shouldBuild = await confirm({
-    message: `Build & Push to GHCR? (v${version} + ${channel})`,
+    message: `Build & Push to GHCR? (v${releaseVersion} + ${selectedChannel})`,
     initialValue: true,
   });
   checkCancel(shouldBuild);
@@ -154,8 +175,8 @@ async function main() {
     await run("docker", ["buildx", "build", 
         "--platform", "linux/amd64,linux/arm64",
         "--push",
-        "--tag", `ghcr.io/dawescc/lettarrboxd:${version}`,
-        "--tag", `ghcr.io/dawescc/lettarrboxd:${channel}`,
+        "--tag", `ghcr.io/dawescc/lettarrboxd:${releaseVersion}`, // Specific (e.g. 2.6.6-nightly)
+        "--tag", `ghcr.io/dawescc/lettarrboxd:${selectedChannel}`, // Floating (e.g. nightly)
         "."
     ], s);
     
@@ -164,7 +185,7 @@ async function main() {
 
   // 5. Git Tags
   const shouldPushGit = await confirm({
-    message: "Push git tags and commits to remote?",
+    message: `Push git tag (v${releaseVersion}) and commits?`,
     initialValue: true,
   });
   checkCancel(shouldPushGit);
@@ -172,13 +193,13 @@ async function main() {
   if (shouldPushGit) {
     const s = spinner();
     s.start("Pushing to origin...");
-    await run("git", ["tag", `v${version}`], s);
+    await run("git", ["tag", `v${releaseVersion}`], s);
     await run("git", ["push"], s);
     await run("git", ["push", "--tags"], s);
     s.stop("Git sync complete");
   }
 
-  outro(`Release v${version} completed successfully! 🎉`);
+  outro(`Release v${releaseVersion} completed successfully! 🎉`);
 }
 
 main().catch(console.error);
