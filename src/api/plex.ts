@@ -1,12 +1,12 @@
-
 import Axios, { AxiosInstance } from 'axios';
 import { loadConfig } from '../util/config';
-import { mapConcurrency } from '../util/concurrency';
+import { plexLimiter, itemQueue } from '../util/queues';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
 import { calculateNextTags } from '../util/tagLogic';
 import env from '../util/env';
+import { scrapeCache } from '../util/cache';
 
 let plexClient: AxiosInstance | null = null;
 
@@ -48,25 +48,42 @@ export async function findItemByTmdbId(tmdbId: string, title?: string, year?: nu
     const { url, token } = config.plex;
 
     try {
+        // Check Cache
+        const cacheKey = `plex_resolution_${tmdbId}`;
+        const cachedRatingKey = scrapeCache.get<string>(cacheKey);
+        if (cachedRatingKey) {
+            logger.debug(`[CACHE HIT] Plex Resolution: TMDB ${tmdbId} -> Key ${cachedRatingKey}`);
+            return cachedRatingKey;
+        }
+
         // 1. Try Legacy Agent format first (common)
         // Format: com.plexapp.agents.themoviedb://{id}?lang=en
         const legacyGuid = `com.plexapp.agents.themoviedb://${tmdbId}?lang=en`;
         
         let ratingKey = await searchByGuid(url, token, legacyGuid);
-        if (ratingKey) return ratingKey;
+        if (ratingKey) {
+             scrapeCache.set(cacheKey, ratingKey);
+             return ratingKey;
+        }
 
         // 2. Try Modern Agent format
         // Use type hint if available to save requests
         if (!type || type === 'movie') {
             const movieGuid = `plex://movie/tmdb/${tmdbId}`;
             ratingKey = await searchByGuid(url, token, movieGuid);
-            if (ratingKey) return ratingKey;
+            if (ratingKey) {
+                scrapeCache.set(cacheKey, ratingKey);
+                return ratingKey;
+            }
         }
 
         if (!type || type === 'show') {
             const showGuid = `plex://show/tmdb/${tmdbId}`;
             ratingKey = await searchByGuid(url, token, showGuid);
-            if (ratingKey) return ratingKey;
+            if (ratingKey) {
+                scrapeCache.set(cacheKey, ratingKey);
+                return ratingKey;
+            }
         }
         
         // 3. Last Resort: Search by Title and filter by TMDB ID
@@ -76,6 +93,7 @@ export async function findItemByTmdbId(tmdbId: string, title?: string, year?: nu
             ratingKey = await searchByTitleAndId(url, token, title, tmdbId, year, type);
             if (ratingKey) {
                  logger.debug(`Found item by title fallback: ${title} (Key: ${ratingKey})`);
+                 scrapeCache.set(cacheKey, ratingKey);
                  return ratingKey;
             }
         }
@@ -114,7 +132,7 @@ async function searchByTitleAndId(
     year?: number,
     type?: 'movie' | 'show'
 ): Promise<string | null> {
-    if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting Plex title search for: ${title} (TMDB: ${tmdbId})`);
+    logger.debug(`Starting Plex title search for: ${title} (TMDB: ${tmdbId})`);
     try {
         // Prepare params
         const params: Record<string, any> = {
@@ -199,8 +217,7 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
             const existingSet = new Set(existingLabels.map(l => l.toLowerCase()));
             
             if (finalSet.size === existingSet.size && [...finalSet].every(l => existingSet.has(l))) {
-                 if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Plex item ${metadata.title} labels already up to date.`);
-                 logger.debug(`[DEBUG] Plex item ${metadata.title} labels already up to date.`);
+                 logger.debug(`Plex item ${metadata.title} labels already up to date.`);
                  return;
             }
             
@@ -263,29 +280,33 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
     // Or we update the signature to accept `systemOwnerLabel`.
     // Let's assume 'letterboxd' for movies and 'serializd' for shows based on typeHint.
     
-    const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; // Hardcoded but aligns with our constants
+    const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd'; 
 
-    await mapConcurrency(items, async (item) => {
-        if (!item.tmdbId) return;
+    await itemQueue.addAll(items.map(item => {
+        return async () => {
+             return plexLimiter.schedule(async () => {
+                if (!item.tmdbId) return;
 
-        const itemTags = item.tags || [];
-        // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
-        const allTags = [...new Set([...itemTags, ...globalTags])];
+                const itemTags = item.tags || [];
+                // Combine all tags: Item Specific + Global Config + Extra (passed in arg)
+                const allTags = [...new Set([...itemTags, ...globalTags])];
 
-        if (allTags.length === 0) return;
+                if (allTags.length === 0) return;
 
-        try {
-            // Pass title, year (if available), and type hint for fallback search
-            const year = (item as any).publishedYear || (item as any).year;
-            
-            const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
+                try {
+                    // Pass title, year (if available), and type hint for fallback search
+                    const year = (item as any).publishedYear || (item as any).year;
+                    
+                    const ratingKey = await findItemByTmdbId(item.tmdbId, item.name, year, typeHint, config);
 
-            if (ratingKey) {
-                // Atomic update
-                await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
-            }
-        } catch (e: any) {
-            logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
-        }
-    }, 5);
+                    if (ratingKey) {
+                        // Atomic update
+                        await syncLabels(ratingKey, allTags, managedTags, systemOwnerLabel, typeHint, config);
+                    }
+                } catch (e: any) {
+                    logger.error(`Failed to sync Plex tags for ${item.name}: ${e.message}`);
+                }
+             });
+        };
+    }));
 }

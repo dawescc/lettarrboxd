@@ -1,33 +1,64 @@
-# Lettarrboxd
+# Lettarrboxd / Serializd Sync
 
-**Automated Media Sync: Letterboxd → Radarr & Serializd → Sonarr**
+**Automated Media Sync for Radarr & Sonarr**
 
-> **Note**: This is a significantly enhanced fork of the original [ryanpage/lettarrboxd](https://github.com/ryanpage/lettarrboxd) project. It features a complete rewrite of the core logic to support multiple lists, filtering, list scheduling, Plex integration, and a high-performance Bun runtime.
+![License](https://img.shields.io/github/license/dawescc/lettarrboxd)
+![Docker Image Version (latest by date)](https://img.shields.io/github/v/release/dawescc/lettarrboxd)
 
----
+Lettarrboxd is a high-performance sync tool built on **Bun** that automatically populates your Radarr and Sonarr instances from external lists.
 
-## 🚀 Features
-
-*   **Dual-Service Sync**:
-    *   **Movies**: Syncs Letterboxd Watchlists, Lists, Filmographies, and Collections directly to **Radarr**.
-    *   **TV Shows**: Syncs Serializd Watchlists and User Lists directly to **Sonarr**.
-*   **Smart Automation**:
-    *   **Multiple Lists**: Monitor unlimited lists from varying sources simultaneously.
-    *   **Granular Control**: Override Quality Profiles, Root Folders, and Tags on a *per-list* basis (e.g., "4K" for specific lists, "1080p" for others).
-    *   **Filtering**: Filter source lists by Year, Rating, or Genre before syncing.
-    *   **Scheduling**: Define `activeFrom` and `activeUntil` dates for seasonal lists (e.g., automatically sync Horror lists only in October).
-*   **Ecosystem Integration**:
-    *   **Plex**: Automatically tag items in your Plex library to match their source lists.
-    *   **Cleanup**: Optionally remove items from your media server when they are removed from the source list (`REMOVE_MISSING_ITEMS`).
-*   **Performance**:
-    *   Built on **Bun** for instant startup and low memory footprint.
-    *   Includes a built-in Health Check server for Docker/Kubernetes readiness probes.
+> **Note**: This project is a complete rewrite of the original [ryanpage/lettarrboxd](https://github.com/ryanpage/lettarrboxd), designed for advanced scheduling, multiple list support, and direct Plex integration.
 
 ---
 
-## 🛠️ Quick Start (Simple Mode)
+## Features
 
-For simple use cases (one Movie list + one TV list), you can configure everything via text environment variables.
+### for Movies (Letterboxd → Radarr)
+*   **Universal Support**: Scrape **Watchlists**, **User Lists**, **Filmographies** (Actor/Director/Writer), **Collections**, and **Popular** lists.
+*   **Granular Control**: Override **Quality Profiles** and **Tags** on a per-list basis.
+*   **Smart Filtering**: Filter source lists by **Year** or **Rating** (e.g., "Only sync movies rated 7.0+ released after 1990").
+*   **Scheduling**: Activate specific lists only during certain dates (e.g., automatically sync a "Horror" list only in October).
+
+### for TV Shows (Serializd → Sonarr)
+*   **Watchlists & User Lists**: Automatic sync from [Serializd](https://www.serializd.com).
+*   **Season Awareness**: Intelligently maps seasons from Serializd to Sonarr monitoring.
+
+### Core Ecosystem
+*   **Plex Integration**: Automatically tag items in your Plex library for easy smart collections.
+*   **Library Cleanup**: Optional `REMOVE_MISSING_ITEMS` mode to keep your library in sync with your lists (deletes/unmonitors items removed from the source).
+*   **Performance**: Built on the Bun runtime for instant startup and minimal resource usage.
+*   **Health Checks**: Built-in HTTP server for Docker health probes.
+
+---
+
+## Quick Start
+
+### Docker Compose (Recommended)
+
+To unlock the full power of Lettarrboxd (multiple lists, filtering, overrides), use a `config.yaml` file.
+
+1.  Download [compose/config.example.yaml](compose/config.example.yaml) and save it as `config.yaml`.
+2.  Edit it with your desired lists and settings.
+3.  Deploy using the [compose/docker-compose.yml](compose/docker-compose.yml) file:
+
+```yaml
+services:
+  lettarrboxd:
+    image: ghcr.io/dawescc/lettarrboxd:latest
+    container_name: lettarrboxd
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data  # Persistent cache
+    environment:
+      - RADARR_API_KEY=your_radarr_key
+      - SONARR_API_KEY=your_sonarr_key
+      - PLEX_TOKEN=your_plex_token # Optional
+    restart: unless-stopped
+```
+
+### Simple Mode (Env Vars Only)
+
+For a single-list setup, you can skip the config file:
 
 ```bash
 docker run -d \
@@ -46,112 +77,38 @@ docker run -d \
 
 ---
 
-## ⚡ Advanced Configuration (Recommended)
+## Configuration
 
-To unlock the full power of Lettarrboxd (multiple lists, filtering, overrides), use a `config.yaml` file.
+### `config.yaml` Reference
 
-1.  Download [config.example.yaml](config.example.yaml) and save it as `config.yaml`.
-2.  Edit it with your desired lists and settings.
-3.  Mount it into your container:
+See [compose/config.example.yaml](compose/config.example.yaml) for a comprehensive, commented example of all available options, including:
+* Multiple Lists
+* Metric Filtering (Year, Rating)
+* Date-based Scheduling
+* Per-list Overrides (Quality Profile, Tags)
 
-```yaml
-services:
-  lettarrboxd:
-    image: ghcr.io/dawescc/lettarrboxd:latest
-    container_name: lettarrboxd
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./data:/app/data  # Persistent storage for state tracking
-    environment:
-      # You can still keep sensitive keys in ENV
-      - RADARR_API_KEY=your_key
-      - SONARR_API_KEY=your_key
-    restart: unless-stopped
-```
+### Environment Variables
 
-### What you can do with `config.yaml`:
-
-```yaml
-letterboxd:
-  # 1. Standard Watchlist
-  - url: https://letterboxd.com/user/watchlist/
-    tags: [watchlist]
-
-  # 2. Curated "Best 4K Horror" List
-  - url: https://letterboxd.com/user/list/horror-masterpieces/
-    # Override global quality to 4K
-    qualityProfile: "Ultra HD" 
-    tags: [horror, 4k]
-    # Filter: Only sync high-rated movies
-    filters:
-      minRating: 3.5
-
-  # 3. Seasonal List (Halloween)
-  - url: https://letterboxd.com/user/list/all-hallows-eve/
-    tags: [halloween]
-    # Only active during October
-    activeFrom: "10-01"
-    activeUntil: "10-31"
-
-serializd:
-  - url: https://www.serializd.com/user/username/watchlist
-    tags: [tv-watchlist]
-```
-
----
-
-## 📋 Supported Sources
-
-### Letterboxd (Movies)
-Lettarrboxd can scrape almost any type of list:
-*   **Watchlist**: `.../username/watchlist/`
-*   **Lists**: `.../username/list/list-name/`
-*   **Filmography (Actor/Director/Writer)**: `.../director/christopher-nolan/`
-*   **Collections**: `.../films/in/the-avengers-collection/`
-*   **Popular**: `.../films/popular/`
-
-### Serializd (TV Shows)
-*   **Watchlist**: `.../user/username/watchlist`
-*   **User Lists**: `.../user/username/lists/list-name`
-
----
-
-## ⚙️ Configuration Reference
-
-See [config.example.yaml](config.example.yaml) for the comprehensive list of all available options.
-
-### Common Environment Variables
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `CHECK_INTERVAL_MINUTES` | `60` | Frequency of sync checks |
-| `REMOVE_MISSING_ITEMS` | `false` | **CAUTION**: If true, items removed from your list will be deleted/unmonitored in Radarr/Sonarr |
+| `REMOVE_MISSING_ITEMS` | `false` | **CAUTION**: If true, items removed from your source list will be deleted/unmonitored in Radarr/Sonarr |
 | `DRY_RUN` | `false` | Log planned actions without executing them |
-
-### Plex Integration (Optional)
-Sync your tags to Plex to create smart collections easily.
-| Variable | Description |
-| :--- | :--- |
-| `PLEX_URL` | e.g., `http://192.168.1.50:32400` |
-| `PLEX_TOKEN` | Your Plex Auth Token |
-| `PLEX_TAGS` | Comma-separated labels to apply (e.g. `lettarrboxd`) |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ---
 
-## 🐳 Docker Deployment
+## Release Channels
 
-### Official Image
-`ghcr.io/dawescc/lettarrboxd:latest`
+We publish multi-arch images (`linux/amd64`, `linux/arm64`) to GHCR:
 
-### Health Check
-The container exposes a health check endpoint on port `3000`.
-*   `GET /health`: Returns `200 OK` if idle/syncing, `500` if the last sync job failed.
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+*   `latest`: Stable releases from the `main` branch.
+*   `beta`: Testing candidates from the `beta` branch.
+*   `nightly`: Bleeding edge builds from the `dev` branch.
+*   `vX.Y.Z`: Specific version tags.
 
 ---
 
-*Disclaimer: This project is intended for use with legally sourced media only. The developers are not responsible for any legal issues that may arise from the use of this project.*
+## Contributing
+
+Contributions are welcome! Please ensure all unexpected changes are covered by tests and run `bun run typecheck` before submitting a PR.

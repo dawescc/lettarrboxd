@@ -3,10 +3,11 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { ScrapedSeries } from '../scraper';
-import { mapConcurrency } from '../util/concurrency';
+// import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 import { resolveTagsForItems } from '../util/tagHelper';
+import { sonarrLimiter, itemQueue } from '../util/queues';
 
 // Types
 export interface SonarrSeason {
@@ -242,7 +243,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
             return;
         }
 
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting deleteSeries for ${title} (${id})`);
+        logger.debug(`Starting deleteSeries for ${title} (${id})`);
 
         await retryOperation(async () => {
             await axios.delete(`/api/v3/series/${id}`, {
@@ -253,7 +254,7 @@ export async function deleteSeries(id: number, title: string): Promise<void> {
             });
         }, 'delete series');
 
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished deleteSeries for ${title} (${id})`);
+        logger.debug(`Finished deleteSeries for ${title} (${id})`);
         
         logger.info(`Successfully deleted series: ${title}`);
     } catch (error) {
@@ -369,7 +370,6 @@ async function processSeriesSync(
              await updateSeriesSeasonsRaw(currentItemState, item.seasons);
          }
          
-         if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Series ${item.name} already exists in Sonarr.`);
          logger.debug(`Series ${item.name} already exists in Sonarr.`);
          return { tvdbId, wasAdded: false };
     }
@@ -424,9 +424,11 @@ async function processLibraryCleanup(
 
     if (seriesToRemove.length > 0) {
         logger.info(`Found ${seriesToRemove.length} series to remove.`);
-        await mapConcurrency(seriesToRemove, (s: any) => {
-            return deleteSeries(s.id, s.title);
-        }, 3);
+        await itemQueue.addAll(seriesToRemove.map(s => {
+            return async () => {
+                return sonarrLimiter.schedule(() => deleteSeries(s.id, s.title));
+            };
+        }));
     } else {
         logger.info('No series to remove.');
     }
@@ -462,11 +464,15 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
 
 
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
-    const results = await mapConcurrency(seriesList, async (item) => {
-        const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
-        if (result) keepTvdbIds.add(result.tvdbId);
-        return result;
-    }, 3);
+    const results = await itemQueue.addAll(seriesList.map(item => {
+        return async () => {
+             return sonarrLimiter.schedule(async () => {
+                const result = await processSeriesSync(item, context, existingSeries, keepTvdbIds);
+                if (result) keepTvdbIds.add(result.tvdbId);
+                return result;
+             });
+        };
+    }));
 
     const addedCount = results.filter(r => r && r.wasAdded).length;
     logger.info(`Finished processing series. Added ${addedCount} new series.`);
@@ -486,7 +492,7 @@ export async function updateSeries(existingSeries: SonarrSeriesResponse, newTags
             return;
         }
 
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Updating tags for series: ${existingSeries.title}`);
+        logger.debug(`Updating tags for series: ${existingSeries.title}`);
         logger.info(`Updating tags for series: ${existingSeries.title}`);
         const payload = {
             ...existingSeries,
@@ -592,7 +598,7 @@ export async function addSeries(
         }
 
         const response = await axios.post('/api/v3/series', payload);
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Successfully added series: ${payload.title}`);
+        logger.debug(`Successfully added series: ${payload.title}`);
         logger.info(`Successfully added series: ${payload.title}`, response.data);
         
         return { tvdbId, wasAdded: true };
@@ -614,15 +620,11 @@ export interface SonarrEpisodeFile {
 
 export async function getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
     try {
-        if (env.GRANULAR_LOGGING) {
-            logger.info(`[GRANULAR] Starting getEpisodeFiles for seriesId: ${seriesId}`);
-        }
+        logger.debug(`Starting getEpisodeFiles for seriesId: ${seriesId}`);
         const response = await axios.get<SonarrEpisodeFile[]>('/api/v3/episodefile', {
             params: { seriesId }
         });
-        if (env.GRANULAR_LOGGING) {
-            logger.info(`[GRANULAR] Finished getEpisodeFiles for seriesId: ${seriesId}. Found ${response.data.length} files.`);
-        }
+        logger.debug(`Finished getEpisodeFiles for seriesId: ${seriesId}. Found ${response.data.length} files.`);
         return response.data;
     } catch (error) {
         logger.error(`Error getting episode files for series ${seriesId}:`, error as any);
@@ -636,7 +638,7 @@ export async function deleteEpisodeFile(episodeFileId: number): Promise<void> {
             logger.info(`[DRY RUN] Would delete episode file ID: ${episodeFileId}`);
             return;
         }
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Deleting episode file ${episodeFileId}`);
+        logger.debug(`Deleting episode file ${episodeFileId}`);
         await axios.delete(`/api/v3/episodefile/${episodeFileId}`);
     } catch (error) {
         logger.error(`Error deleting episode file ${episodeFileId}:`, error as any);
@@ -662,7 +664,7 @@ async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targ
             if (env.DRY_RUN) {
                 logger.info(`[DRY RUN] Would update seasons for ${existingSeries.title} to: ${targetSeasons.join(', ')}`);
             } else {
-                if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
+                logger.debug(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
                 logger.info(`Updating seasons for ${existingSeries.title}. Monitoring: ${targetSeasons.join(', ')}`);
                 const updatePayload = {
                     ...existingSeries,
@@ -686,16 +688,14 @@ async function updateSeriesSeasonsRaw(existingSeries: SonarrSeriesResponse, targ
                  const episodeFiles = await getEpisodeFiles(existingSeries.id);
                  const filesToDelete = episodeFiles.filter(f => seasonsToCleanup.includes(f.seasonNumber));
 
-                 if (env.GRANULAR_LOGGING) {
-                     logger.info(`[GRANULAR] ${existingSeries.title}: Total files ${episodeFiles.length}, candidates for delete ${filesToDelete.length}`);
-                 }
+                 logger.debug(`${existingSeries.title}: Total files ${episodeFiles.length}, candidates for delete ${filesToDelete.length}`);
 
                  if (filesToDelete.length > 0) {
                      logger.info(`Found ${filesToDelete.length} files to delete for ${existingSeries.title} (Seasons: ${seasonsToCleanup.join(', ')})`);
                      
                      for (const file of filesToDelete) {
                         try {
-                            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Deleting file ${file.id} for ${existingSeries.title}`);
+                            logger.debug(`Deleting file ${file.id} for ${existingSeries.title}`);
                             await deleteEpisodeFile(file.id);
                         } catch (err) {
                             logger.error(err as any, `Failed to delete file ${file.id}`);

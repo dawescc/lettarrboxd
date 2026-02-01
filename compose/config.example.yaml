@@ -73,7 +73,7 @@ sonarr:
    seasonMonitoring: "all"
 
 plex:
-  url: "http://192.168.1.50:32400"
+  url: "https://localhost:32400"
   token: "your-plex-token"
   tags: ["lettarrboxd-synced"] 
   # These labels are applied to all synced items in Plex

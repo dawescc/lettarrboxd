@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-import { mapConcurrency } from './util/concurrency';
+
 import env from './util/env';
 import config, { loadConfig } from './util/config';
 import logger from './util/logger';
@@ -62,9 +62,9 @@ function scheduleNextRun() {
 /**
  * Process Movie Lists (Letterboxd -> Radarr)
  */
-import { TaskQueue } from './util/queue';
+import { listQueue } from './util/queues';
 
-const listQueue = new TaskQueue();
+// Use listQueue for fetching lists to prevent fan-out
 
 export async function syncMoviesFromLists(
     lists: BaseListConfig[],
@@ -84,16 +84,16 @@ export async function syncMoviesFromLists(
 
     logger.info(`Processing ${lists.length} Letterboxd lists...`);
 
-    await mapConcurrency(lists, async (list) => {
+    await Promise.all(lists.map(list => listQueue.add(async () => {
         if (!isListActive(list)) {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
+
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
         }
 
         try {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            logger.debug(`Fetching list: ${list.url}`);
             
             // Letterboxd Fetcher + Filter Logic
             const { items: movies, hasErrors: listHasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
@@ -172,7 +172,7 @@ export async function syncMoviesFromLists(
                 abortCleanup = true;
             }
         }
-    }, listQueue);
+    })));
 
     // Calculate Managed Tags
     const managedTags = new Set<string>();
@@ -238,16 +238,16 @@ export async function syncShowsFromLists(
 
     logger.info(`Processing ${lists.length} Serializd lists...`);
 
-    await mapConcurrency(lists, async (list) => {
+    await Promise.all(lists.map(list => listQueue.add(async () => {
         if (!isListActive(list)) {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Skipping inactive list: ${list.id || list.url}`);
+
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
-            return;
+            return; // Return early for inactive lists
         }
 
         try {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Fetching list: ${list.url}`);
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
+            logger.debug(`Fetching list: ${list.url}`);
             
             // Serializd Fetcher
             const scraper = new SerializdScraper(list.url);
@@ -301,7 +301,7 @@ export async function syncShowsFromLists(
                 abortCleanup = true;
             }
         }
-    }, listQueue);
+    })));
 
     const managedTags = new Set<string>();
     potentialManagedTags.forEach(t => {

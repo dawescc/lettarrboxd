@@ -1,0 +1,24 @@
+services:
+  lettarrboxd:
+    image: ghcr.io/dawescc/lettarrboxd:latest
+    container_name: lettarrboxd
+    # Load environment variables from .env file if present
+    # env_file: 
+    #   - .env
+    environment:
+      # Optional: Override/Set API Keys here if not using .env
+      # - RADARR_API_KEY=your_key 
+      # - SONARR_API_KEY=your_key
+      
+      - LOG_LEVEL=info
+      - CHECK_INTERVAL_MINUTES=60
+      - TZ=America/New_York
+      
+      # Optional: Health Check Port (Default 3000)
+      # - PORT=3000
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
+    ports:
+      - "3000:3000" # Expose health check port
+    restart: unless-stopped

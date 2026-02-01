@@ -21,9 +21,9 @@ export async function retryOperation<T>(
 
     for (let i = 0; i < retries; i++) {
         try {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting operation: ${name}`);
+            logger.debug(`Starting operation: ${name}`);
             const result = await operation();
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished operation: ${name}`);
+            logger.debug(`Finished operation: ${name}`);
             return result;
         } catch (error) {
             if (i === retries - 1) throw error;

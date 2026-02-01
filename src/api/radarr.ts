@@ -3,9 +3,10 @@ import env from '../util/env';
 import { loadConfig } from '../util/config';
 import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
-import { mapConcurrency } from '../util/concurrency';
+// import { mapConcurrency } from '../util/concurrency';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
+import { radarrLimiter, itemQueue } from '../util/queues';
 
 import { resolveTagsForItems } from '../util/tagHelper';
 
@@ -147,7 +148,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
             return;
         }
 
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Starting deleteMovie for ${title} (${id})`);
+        logger.debug(`Starting deleteMovie for ${title} (${id})`);
         
         await retryOperation(async () => {
             await axios.delete(`/api/v3/movie/${id}`, {
@@ -158,7 +159,7 @@ export async function deleteMovie(id: number, title: string): Promise<void> {
             });
         }, 'delete movie');
         
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished deleteMovie for ${title} (${id})`);
+        logger.debug(`Finished deleteMovie for ${title} (${id})`);
 
         logger.info(`Successfully deleted movie: ${title}`);
     } catch (error) {
@@ -276,11 +277,9 @@ async function processMovieSync(
              if (nextTags.length !== currentSet.size || !nextTags.every((t: any) => currentSet.has(t))) {
                  await updateMovie(existingMovie, nextTags);
              } else {
-                 if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Movie ${movie.name} tags already up to date.`);
                  logger.debug(`Movie ${movie.name} tags already up to date.`);
              }
          } else {
-             if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Skipping update for ${movie.name}: Missing ownership tag.`);
              logger.debug(`Skipping update for ${movie.name}: Missing ownership tag.`);
          }
          return;
@@ -325,10 +324,15 @@ async function processLibraryCleanup(
 
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
-        await mapConcurrency(moviesToRemove, async (movie: any) => {
-            if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Processing removal for ${movie.title}`);
-            return await deleteMovie(movie.id, movie.title);
-        }, 3);
+        logger.debug(`Processing removal for ${moviesToRemove.length} movies...`);
+        await itemQueue.addAll(moviesToRemove.map(movie => {
+            return async () => {
+                return radarrLimiter.schedule(async () => {
+                    logger.debug(`Creating delete task for ${movie.title}`);
+                    await deleteMovie(movie.id, movie.title);
+                });
+            };
+        }));
     } else {
         logger.info('No movies to remove.');
     }
@@ -357,9 +361,11 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
 
 
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    await mapConcurrency(movies, async (movie) => {
-        await processMovieSync(movie, context, existingMoviesMap);
-    }, 3);
+    const results = await itemQueue.addAll(movies.map(movie => {
+        return async () => {
+            return radarrLimiter.schedule(() => processMovieSync(movie, context, existingMoviesMap));
+        };
+    }));
     logger.info(`Finished processing movies.`);
 
 
@@ -381,12 +387,11 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
         const tmdbId = parseInt(movie.tmdbId);
 
         if (existingMoviesMap && existingMoviesMap.has(tmdbId)) {
-            if (env.GRANULAR_LOGGING) logger.debug(`[GRANULAR] Movie ${movie.name} already in Radarr (cached)`);
             logger.debug(`Movie ${movie.name} already exists in Radarr (cached), skipping`);
             return;
         }
 
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Adding movie to Radarr: ${movie.name}`);
+        logger.debug(`Adding movie to Radarr: ${movie.name}`);
         logger.debug(`Adding movie to Radarr: ${movie.name}`);
 
         const payload: RadarrMovie = {
@@ -408,7 +413,7 @@ export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number,
         }
 
         const response = await axios.post('/api/v3/movie', payload);
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Successfully added movie: ${payload.title}`);
+        logger.debug(`Successfully added movie: ${payload.title}`);
         logger.info(`Successfully added movie: ${payload.title}`, response.data);
     } catch (e: any) {
         const isExistsError = e.response?.data && Array.isArray(e.response.data) && e.response.data.some((err: any) => 
@@ -437,8 +442,8 @@ export async function updateMovie(existingMovie: any, newTags: number[]): Promis
             logger.info(`[DRY RUN] Would update tags for movie: ${existingMovie.title} -> [${newTags.join(', ')}]`);
             return;
         }
-
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Updating tags for movie: ${existingMovie.title}`);
+        
+        logger.debug(`Updating tags for movie: ${existingMovie.title}`);
         logger.info(`Updating tags for movie: ${existingMovie.title}`);
         const payload = {
             ...existingMovie,
@@ -446,7 +451,7 @@ export async function updateMovie(existingMovie: any, newTags: number[]): Promis
         };
 
         await axios.put(`/api/v3/movie/${existingMovie.id}`, payload);
-        if (env.GRANULAR_LOGGING) logger.info(`[GRANULAR] Finished updating tags for movie: ${existingMovie.title}`);
+        logger.debug(`Finished updating tags for movie: ${existingMovie.title}`);
     } catch (e: any) {
         logger.error(`Error updating movie ${existingMovie.title}:`, e as any);
     }

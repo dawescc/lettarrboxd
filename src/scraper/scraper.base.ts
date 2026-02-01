@@ -1,14 +1,13 @@
 import * as cheerio from 'cheerio';
-import { mapConcurrency } from '../util/concurrency';
+import { scraperLimiter, itemQueue } from '../util/queues';
 import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
 import { getMovie } from './movie';
 import logger from '../util/logger';
 import Scraper from './scraper.interface';
 import { retryOperation } from '../util/retry';
+import env from '../util/env';
 
-import { TaskQueue } from '../util/queue';
 
-const networkQueue = new TaskQueue();
 
 export abstract class BaseScraper implements Scraper {
     constructor(
@@ -57,18 +56,20 @@ export abstract class BaseScraper implements Scraper {
 
         let hasErrors = false;
 
-        const movies = await mapConcurrency(linksToProcess, async (link) => {
-            try {
-                const delay = Math.floor(Math.random() * 1000) + 500;
-                await new Promise(resolve => setTimeout(resolve, delay));
-                
-                return await getMovie(link);
-            } catch (e: any) {
-                logger.warn(`Failed to scrape movie ${link}: ${e.message}`);
-                hasErrors = true;
-                return null;
-            }
-        }, networkQueue);
+        const movies = await itemQueue.addAll(linksToProcess.map(link => {
+            return async () => {
+                return scraperLimiter.schedule(async () => {
+                    try {
+                        logger.debug(`Processing link ${link} (Active: ${scraperLimiter.counts().EXECUTING})`);
+                        return await getMovie(link);
+                    } catch (e: any) {
+                        logger.warn(`Failed to scrape movie ${link}: ${e.message}`);
+                        hasErrors = true;
+                        return null;
+                    }
+                });
+            };
+        }));
         
         const validMovies = movies.filter((m): m is LetterboxdMovie => m !== null);
         
