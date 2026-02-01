@@ -1,4 +1,4 @@
-# Lettarrboxd / Serializd Sync
+# Lettarrboxd
 
 **Automated Media Sync for Radarr & Sonarr**
 
