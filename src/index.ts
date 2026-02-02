@@ -1,6 +1,5 @@
 require('dotenv').config();
 
-
 import env from './util/env';
 import config, { loadConfig } from './util/config';
 import logger from './util/logger';
@@ -12,6 +11,7 @@ import { syncSeries } from './api/sonarr';
 import * as plex from './api/plex';
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
 import { TAG_LETTERBOXD, TAG_SERIALIZD } from './util/constants';
+import { masterQueue, listQueue } from './util/queues';
 
 // Types for our generic processor
 interface BaseListConfig {
@@ -31,41 +31,36 @@ interface BaseListConfig {
 }
 
 function startScheduledMonitoring(): void {
-  // Run immediately on startup
-  setAppStatus('syncing');
-  run().catch(e => {
-      logger.error('Fatal error in initial run:', e);
-  }).finally(() => {
-    setAppStatus('idle');
-    scheduleNextRun();
-  });
-  
-  logger.info(`Scheduled to run every ${env.CHECK_INTERVAL_MINUTES} minutes`);
+    setAppStatus('syncing');
+    run().catch(e => {
+        logger.error('Fatal error in initial run:', e);
+    }).finally(() => {
+        setAppStatus('idle');
+        scheduleNextRun();
+    });
+
+    logger.info(`Scheduled to run every ${env.CHECK_INTERVAL_MINUTES} minutes`);
 }
 
 function scheduleNextRun() {
-  const intervalMs = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
-  setTimeout(() => {
-    setAppStatus('syncing');
-    run().catch(e => {
-        logger.error('Fatal error in scheduled run:', e);
-    }).finally(() => {
-      setAppStatus('idle');
-      scheduleNextRun();
-    });
-  }, intervalMs);
-  
-  const nextRun = new Date(Date.now() + intervalMs);
-  logger.info(`Next run scheduled for: ${nextRun.toLocaleString()}`);
+    const intervalMs = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
+    setTimeout(() => {
+        setAppStatus('syncing');
+        run().catch(e => {
+            logger.error('Fatal error in scheduled run:', e);
+        }).finally(() => {
+            setAppStatus('idle');
+            scheduleNextRun();
+        });
+    }, intervalMs);
+
+    const nextRun = new Date(Date.now() + intervalMs);
+    logger.info(`Next run scheduled for: ${nextRun.toLocaleString()}`);
 }
 
 /**
  * Process Movie Lists (Letterboxd -> Radarr)
  */
-import { listQueue } from './util/queues';
-
-// Use listQueue for fetching lists to prevent fan-out
-
 export async function syncMoviesFromLists(
     lists: BaseListConfig[],
     plexGlobalTags: string[]
@@ -80,46 +75,44 @@ export async function syncMoviesFromLists(
     let hasError = false;
     let abortCleanup = false;
 
-    const allItems = new Map<string, LetterboxdMovie>(); // TMDB ID -> Movie
+    const allItems = new Map<string, LetterboxdMovie>();
 
     logger.info(`Processing ${lists.length} Letterboxd lists...`);
 
-    await Promise.all(lists.map(list => listQueue.add(async () => {
+    // Use listQueue for list processing
+    await listQueue.addAll(lists.map(list => async () => {
         if (!isListActive(list)) {
-
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
         }
 
         try {
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            logger.debug(`Fetching list: ${list.url}`);
-            
-            // Letterboxd Fetcher + Filter Logic
+
             const { items: movies, hasErrors: listHasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
-            
-            // Apply Filters (Specific to Movies)
+
+            // Apply Filters
             let filteredMovies = movies;
             if (list.filters) {
                 const initialCount = movies.length;
                 filteredMovies = movies.filter(movie => {
                     const { minRating, minYear, maxYear } = list.filters!;
-                    
+
                     if (minRating !== undefined && (movie.rating === undefined || movie.rating === null || movie.rating < minRating)) return false;
                     if (minYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear < minYear)) return false;
                     if (maxYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear > maxYear)) return false;
-                    
+
                     return true;
                 });
-                
+
                 const excludedCount = initialCount - filteredMovies.length;
                 if (excludedCount > 0) {
-                    logger.info(`Filtered ${excludedCount} items from list ${list.url} based on configuration.`);
+                    logger.info(`Filtered ${excludedCount} items from list based on configuration.`);
                 }
             }
 
             if (listHasErrors) {
-                logger.warn(`List ${list.url} reported partial errors. Marking associated tags as UNSAFE.`);
+                logger.warn(`List ${list.url} reported partial errors. Marking tags as UNSAFE.`);
                 if (list.tags && list.tags.length > 0) {
                     list.tags.forEach(t => unsafeTags.add(t));
                 } else {
@@ -137,8 +130,8 @@ export async function syncMoviesFromLists(
                     if (list.tags && list.tags.length > 0) {
                         list.tags.forEach(t => unsafeTags.add(t));
                     } else {
-                         logger.error(`List ${list.url} has items without IDs and NO tags. Activating SAFETY LOCK.`);
-                         abortCleanup = true;
+                        logger.error(`List has items without IDs and NO tags. Activating SAFETY LOCK.`);
+                        abortCleanup = true;
                     }
                     continue;
                 }
@@ -148,7 +141,7 @@ export async function syncMoviesFromLists(
                     const existingTags = existing.tags || [];
                     const newTags = list.tags || [];
                     existing.tags = [...new Set([...existingTags, ...newTags])];
-                    
+
                     if (list.qualityProfile) {
                         existing.qualityProfile = list.qualityProfile;
                     }
@@ -160,7 +153,7 @@ export async function syncMoviesFromLists(
                     allItems.set(movie.tmdbId, movie);
                 }
             }
-            logger.info(`Fetched ${filteredMovies.length} movies from list (${list.url}).`);
+            logger.info(`Fetched ${filteredMovies.length} movies from list.`);
 
         } catch (e: any) {
             logger.error(`Error fetching list ${list.url}:`, e);
@@ -168,11 +161,11 @@ export async function syncMoviesFromLists(
             if (list.tags && list.tags.length > 0) {
                 list.tags.forEach(t => unsafeTags.add(t));
             } else {
-                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
+                logger.error(`List failed entirely and has NO tags. Activating SAFETY LOCK.`);
                 abortCleanup = true;
             }
         }
-    })));
+    }));
 
     // Calculate Managed Tags
     const managedTags = new Set<string>();
@@ -180,39 +173,37 @@ export async function syncMoviesFromLists(
         if (!unsafeTags.has(t)) {
             managedTags.add(t);
         } else {
-            logger.warn(`Tag '${t}' is present in a failed list. It will be protected from cleanup.`);
+            logger.warn(`Tag '${t}' is present in a failed list. Protected from cleanup.`);
         }
     });
 
     const uniqueMovies = Array.from(allItems.values());
 
     if (uniqueMovies.length > 0) {
-        // If we found movies, we are "working", even if some lists failed. 
-        // Report OK but include error note in message.
-        const statusMsg = hasError 
-            ? `Found ${uniqueMovies.length} unique movies (some list errors)` 
+        const statusMsg = hasError
+            ? `Found ${uniqueMovies.length} unique movies (some list errors)`
             : `Found ${uniqueMovies.length} unique movies`;
-            
+
         updateComponentStatus('letterboxd', 'ok', statusMsg);
         logger.info(`Total unique movies found: ${uniqueMovies.length}`);
-        
+
         try {
             await syncMovies(uniqueMovies, managedTags, unsafeTags, abortCleanup);
             updateComponentStatus('radarr', 'ok');
-            
+
             const allPlexTags = [...plexGlobalTags, TAG_LETTERBOXD];
             const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
-            
+
             await plex.syncPlexTags(uniqueMovies, allPlexTags, plexManagedTags, 'movie');
         } catch (e: any) {
             updateComponentStatus('radarr', 'error', e.message);
-            throw e; 
+            throw e;
         }
     } else {
         if (hasError) {
-             updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
+            updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
         } else {
-             updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
+            updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
         }
     }
 }
@@ -234,22 +225,20 @@ export async function syncShowsFromLists(
     let hasError = false;
     let abortCleanup = false;
 
-    const allItems = new Map<string, ScrapedSeries>(); // ShowID -> Series
+    const allItems = new Map<string, ScrapedSeries>();
 
     logger.info(`Processing ${lists.length} Serializd lists...`);
 
-    await Promise.all(lists.map(list => listQueue.add(async () => {
+    // Use listQueue for list processing
+    await listQueue.addAll(lists.map(list => async () => {
         if (!isListActive(list)) {
-
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
-            return; // Return early for inactive lists
+            return;
         }
 
         try {
             logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            logger.debug(`Fetching list: ${list.url}`);
-            
-            // Serializd Fetcher
+
             const scraper = new SerializdScraper(list.url);
             const { items: shows, hasErrors: listHasErrors } = await scraper.getSeries();
 
@@ -267,20 +256,17 @@ export async function syncShowsFromLists(
             if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
 
             for (const show of shows) {
-                 // Serializd doesn't always have TMDB IDs in the same way, but we use showId
-                 const key = show.tmdbId || show.id.toString();
+                const key = show.tmdbId || show.id.toString();
 
-                 if (allItems.has(key)) {
+                if (allItems.has(key)) {
                     const existing = allItems.get(key)!;
                     const existingTags = existing.tags || [];
                     const newTags = list.tags || [];
                     existing.tags = [...new Set([...existingTags, ...newTags])];
-                    
+
                     if (list.qualityProfile) {
                         existing.qualityProfile = list.qualityProfile;
                     }
-                    
-                    // Merge seasons Logic could go here if needed
                 } else {
                     show.tags = [...(list.tags || [])];
                     if (list.qualityProfile) {
@@ -289,7 +275,7 @@ export async function syncShowsFromLists(
                     allItems.set(key, show);
                 }
             }
-             logger.info(`Fetched ${shows.length} shows from list (${list.url}).`);
+            logger.info(`Fetched ${shows.length} shows from list.`);
 
         } catch (e: any) {
             logger.error(`Error fetching list ${list.url}:`, e);
@@ -297,18 +283,18 @@ export async function syncShowsFromLists(
             if (list.tags && list.tags.length > 0) {
                 list.tags.forEach(t => unsafeTags.add(t));
             } else {
-                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
+                logger.error(`List failed entirely and has NO tags. Activating SAFETY LOCK.`);
                 abortCleanup = true;
             }
         }
-    })));
+    }));
 
     const managedTags = new Set<string>();
     potentialManagedTags.forEach(t => {
         if (!unsafeTags.has(t)) {
             managedTags.add(t);
         } else {
-             logger.warn(`Tag '${t}' is present in a failed list. Protected.`);
+            logger.warn(`Tag '${t}' is present in a failed list. Protected.`);
         }
     });
 
@@ -321,59 +307,56 @@ export async function syncShowsFromLists(
 
         updateComponentStatus('serializd', 'ok', statusMsg);
         logger.info(`Total unique shows found: ${uniqueShows.length}`);
-        
+
         try {
             await syncSeries(uniqueShows, managedTags, unsafeTags, abortCleanup);
             updateComponentStatus('sonarr', 'ok');
-            
+
             const allPlexTags = [...plexGlobalTags, TAG_SERIALIZD];
             const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
-            
+
             await plex.syncPlexTags(uniqueShows, allPlexTags, plexManagedTags, 'show');
         } catch (e: any) {
             updateComponentStatus('sonarr', 'error', e.message);
-            throw e; 
+            throw e;
         }
     } else {
         if (hasError) {
-             updateComponentStatus('serializd', 'error', 'Failed to fetch any shows');
+            updateComponentStatus('serializd', 'error', 'Failed to fetch any shows');
         } else {
-             updateComponentStatus('serializd', 'ok', 'No shows found in lists');
+            updateComponentStatus('serializd', 'ok', 'No shows found in lists');
         }
     }
 }
 
 export async function run() {
-    // Reload config on every run
     const currentConfig = loadConfig();
 
-    // 1. Process Movies
-    await syncMoviesFromLists(
-        currentConfig.letterboxd,
-        currentConfig.radarr?.tags || []
-    );
+    logger.info('Starting sync...');
 
-    // 2. Process Shows
-    await syncShowsFromLists(
-        currentConfig.serializd,
-        currentConfig.sonarr?.tags || []
-    );
-  
-  logger.info('Sync complete.');
+    // Use masterQueue to run movies and shows in parallel
+    await masterQueue.addAll([
+        () => syncMoviesFromLists(
+            currentConfig.letterboxd,
+            currentConfig.radarr?.tags || []
+        ),
+        () => syncShowsFromLists(
+            currentConfig.serializd,
+            currentConfig.sonarr?.tags || []
+        )
+    ]);
+
+    logger.info('Sync complete.');
 }
 
 export async function main() {
-  // Start health check server
-  startHealthServer(3000);
-
-  startScheduledMonitoring();
-  
-  // Keep the process alive
-  logger.info('Application started successfully. Monitoring for changes...');
+    startHealthServer(3000);
+    startScheduledMonitoring();
+    logger.info('Application started successfully.');
 }
 
 export { startScheduledMonitoring };
 
 if (require.main === module) {
-  main().catch((e) => logger.error(e));
+    main().catch((e) => logger.error(e));
 }

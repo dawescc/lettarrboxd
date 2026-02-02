@@ -1,20 +1,17 @@
 import * as cheerio from 'cheerio';
-import { scraperLimiter, itemQueue } from '../util/queues';
+import { itemQueue, rateLimitedFetch } from '../util/queues';
 import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
 import { getMovie } from './movie';
 import logger from '../util/logger';
 import Scraper from './scraper.interface';
 import { retryOperation } from '../util/retry';
-import env from '../util/env';
-
-
 
 export abstract class BaseScraper implements Scraper {
     constructor(
-        protected url: string, 
-        protected take?: number, 
+        protected url: string,
+        protected take?: number,
         protected strategy?: 'oldest' | 'newest'
-    ) {}
+    ) { }
 
     // Abstract methods that must be implemented by subclasses
     protected abstract transformUrl(url: string): string;
@@ -25,56 +22,53 @@ export abstract class BaseScraper implements Scraper {
     protected verifyEmptyList(html: string): void {
         const $ = cheerio.load(html);
         const text = $.text();
-        
-        // Common phrases for empty lists on Letterboxd
+
         const emptyIndicators = [
             'There are no films in this list',
             'No films',
             'No entries',
-            'Follow this list to receive updates', // Often appears on empty lists
-            'Add films to this list'  // Owner view
+            'Follow this list to receive updates',
+            'Add films to this list'
         ];
 
-        // We look for at least ONE indicator to consider it safely "empty"
         const isExplicitlyEmpty = emptyIndicators.some(indicator => text.includes(indicator));
 
         if (!isExplicitlyEmpty) {
-            // Log the HTML snippet for debugging (truncate to avoid massive logs)
             const bodyPreview = $('body').text().substring(0, 500).replace(/\s+/g, ' ');
-            throw new Error(`Scraper found 0 items but could not verify list is empty. Possible layout change. Body preview: ${bodyPreview}`);
+            throw new Error(`Scraper found 0 items but could not verify list is empty. Body preview: ${bodyPreview}`);
         }
-        
-        logger.info('List is confirmed empty (found empty state text).');
+
+        logger.info('List is confirmed empty.');
     }
 
     async getMovies(): Promise<{ items: LetterboxdMovie[], hasErrors: boolean }> {
-        // Transform user-facing URL to processable URL (e.g. AJAX endpoint or sort query)
         const processUrl = this.transformUrl(this.url);
-        
+
         const allMovieLinks = await this.getAllMovieLinks(processUrl);
         const linksToProcess = typeof this.take === 'number' ? allMovieLinks.slice(0, this.take) : allMovieLinks;
 
         let hasErrors = false;
 
+        logger.info(`Processing ${linksToProcess.length} movie links...`);
+
+        // Use itemQueue for concurrency - HTTP calls already rate-limited via rateLimitedFetch
         const movies = await itemQueue.addAll(linksToProcess.map(link => {
             return async () => {
-                return scraperLimiter.schedule(async () => {
-                    try {
-                        logger.debug(`Processing link ${link} (Active: ${scraperLimiter.counts().EXECUTING})`);
-                        return await getMovie(link);
-                    } catch (e: any) {
-                        logger.warn(`Failed to scrape movie ${link}: ${e.message}`);
-                        hasErrors = true;
-                        return null;
-                    }
-                });
+                try {
+                    logger.debug(`Processing: ${link}`);
+                    return await getMovie(link);
+                } catch (e: any) {
+                    logger.warn(`Failed to scrape ${link}: ${e.message}`);
+                    hasErrors = true;
+                    return null;
+                }
             };
         }));
-        
+
         const validMovies = movies.filter((m): m is LetterboxdMovie => m !== null);
-        
+
         if (hasErrors) {
-            logger.warn(`Scrape for ${this.url} had some failures. ${validMovies.length}/${linksToProcess.length} movies retrieved.`);
+            logger.warn(`Scrape had failures. ${validMovies.length}/${linksToProcess.length} movies retrieved.`);
         }
 
         return { items: validMovies, hasErrors };
@@ -84,34 +78,31 @@ export abstract class BaseScraper implements Scraper {
         let currentUrl: string | null = baseUrl;
         const allLinks: string[] = [];
         let pageCount = 0;
-        
+
         while (currentUrl) {
             pageCount++;
             logger.info(`Fetching page ${pageCount}: ${currentUrl}`);
-            
+
             try {
                 const html = await this.fetchPageWithRetry(currentUrl, pageCount);
                 const pageLinks = this.getMovieLinksFromHtml(html);
-                
-                // SAFETY CHECK: If we found no links, we MUST verify the page is actually empty
-                // otherwise it might be a layout change or scraper bug, which could lead to data loss.
+
                 if (pageLinks.length === 0 && allLinks.length === 0) {
                     try {
                         this.verifyEmptyList(html);
                     } catch (e) {
-                         // Rethrow immediately for critical safety failure
-                         throw e;
+                        throw e;
                     }
                 }
 
                 allLinks.push(...pageLinks);
-                
+
                 if (this.take && allLinks.length >= this.take) {
                     logger.debug(`Reached take limit (${this.take}). Stopping pagination.`);
                     currentUrl = null;
                 } else {
                     currentUrl = this.getNextPageUrl(html);
-                    
+
                     if (currentUrl) {
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     }
@@ -120,7 +111,7 @@ export abstract class BaseScraper implements Scraper {
                 throw error;
             }
         }
-        
+
         logger.debug(`Retrieved ${allLinks.length} links from scraper.`);
         return allLinks;
     }
@@ -129,15 +120,16 @@ export abstract class BaseScraper implements Scraper {
         return await retryOperation(async () => {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 30000);
-            
+
             try {
-                const response = await fetch(url, { signal: controller.signal });
+                // Use rate-limited fetch - automatically queued through Bottleneck
+                const response = await rateLimitedFetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
-                
+
                 if (!response.ok) {
                     throw new Error(`Failed to fetch page: ${response.status}`);
                 }
-                
+
                 return await response.text();
             } catch (e: any) {
                 clearTimeout(timeoutId);

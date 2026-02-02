@@ -1,8 +1,8 @@
 import * as cheerio from 'cheerio';
 import { LETTERBOXD_BASE_URL, LetterboxdMovie } from ".";
 import logger from '../util/logger';
-import env from '../util/env';
 import { scrapeCache } from '../util/cache';
+import { rateLimitedFetch } from '../util/queues';
 
 /**
  * Obtain details of a movie.
@@ -16,23 +16,24 @@ export async function getMovie(link: string): Promise<LetterboxdMovie> {
         return cached;
     }
 
-    logger.debug(`Fetching movie page: ${link}`);
+    logger.debug(`Fetching movie: ${link}`);
     const movieUrl = new URL(link, LETTERBOXD_BASE_URL).toString();
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-        const response = await fetch(movieUrl, { signal: controller.signal });
+        // Use rate-limited fetch - automatically queued through Bottleneck
+        const response = await rateLimitedFetch(movieUrl, { signal: controller.signal });
         clearTimeout(timeoutId);
 
         if (!response.ok) {
             throw new Error(`Failed to fetch movie page: ${response.status} ${response.statusText}`);
         }
-        
+
         const html = await response.text();
         const movie = extractMovieFromHtml(link, html);
-        
+
         scrapeCache.set(cacheKey, movie);
         return movie;
     } catch (metric: unknown) {
@@ -47,31 +48,26 @@ export async function getMovie(link: string): Promise<LetterboxdMovie> {
 
 function extractMovieFromHtml(slug: string, html: string): LetterboxdMovie {
     const $ = cheerio.load(html);
-    
-    // Improved extraction with better logging context if needed
-    // but keep it simple as failing one field usually shouldn't kill the whole process 
-    // unless it's critical like ID.
-    
-    const id = extractLetterboxdId($); // Critical
-    const name = extractName($); // Critical
+
+    const id = extractLetterboxdId($);
+    const name = extractName($);
     const tmdbId = extractTmdbId($);
     const imdbId = extractImdbId($);
     const year = extractPublishedYear($);
     const rating = extractRating($);
-    
+
     return {
         id,
         name,
         imdbId,
         tmdbId,
-        publishedYear: year, // Now properly typed as number | null
+        publishedYear: year,
         rating,
         slug
     };
 }
 
-function extractRating($: cheerio.CheerioAPI): number|null {
-    // Try JSON-LD first (most reliable)
+function extractRating($: cheerio.CheerioAPI): number | null {
     try {
         const jsonLdScript = $('script[type="application/ld+json"]');
         if (jsonLdScript.length) {
@@ -81,10 +77,9 @@ function extractRating($: cheerio.CheerioAPI): number|null {
             }
         }
     } catch (e: unknown) {
-         logger.debug(`Failed to parse JSON-LD for rating: ${(e as Error).message}`);
+        logger.debug(`Failed to parse JSON-LD for rating: ${(e as Error).message}`);
     }
 
-    // Fallback to meta tag (twitter:data2 = "3.5 out of 5")
     const metaRating = $('meta[name="twitter:data2"]').attr('content');
     if (metaRating) {
         const match = metaRating.match(/([\d.]+) out of 5/);
@@ -100,34 +95,33 @@ function extractName($: cheerio.CheerioAPI): string {
     return $('.primaryname').first().text().trim();
 }
 
-function extractTmdbId($: cheerio.CheerioAPI): string|null {
+function extractTmdbId($: cheerio.CheerioAPI): string | null {
     const tmdbLink = $('a[data-track-action="TMDB"]').attr('href');
     if (!tmdbLink) {
-        // Reduced log level to debug as this is common for TV shows
-        logger.debug('Could not find TMDB link. This could happen if there is a TV show in the list.');
+        logger.debug('Could not find TMDB link.');
         return null;
     }
-    
+
     const tmdbMatch = tmdbLink.match(/\/movie\/(\d+)/);
     if (!tmdbMatch) {
-         logger.debug(`Could not extract TMDB ID from link: ${tmdbLink}`);
-         return null;
+        logger.debug(`Could not extract TMDB ID from: ${tmdbLink}`);
+        return null;
     }
-    
+
     return tmdbMatch[1];
 }
 
-function extractImdbId($: cheerio.CheerioAPI): string|null {
+function extractImdbId($: cheerio.CheerioAPI): string | null {
     const imdbLink = $('a[href*="imdb.com"]').attr('href');
     if (!imdbLink) {
         return null;
     }
-    
+
     const imdbMatch = imdbLink.match(/\/title\/(tt\d+)/);
     if (!imdbMatch) {
         return null;
     }
-    
+
     return imdbMatch[1];
 }
 
@@ -136,11 +130,11 @@ function extractLetterboxdId($: cheerio.CheerioAPI): number {
     if (!filmId) {
         throw new Error('Could not find Letterboxd film ID');
     }
-    
+
     return parseInt(filmId, 10);
 }
 
-function extractPublishedYear($: cheerio.CheerioAPI): number|null {
+function extractPublishedYear($: cheerio.CheerioAPI): number | null {
     const releaseDateLink = $('span.releasedate a').attr('href');
     if (releaseDateLink) {
         const yearMatch = releaseDateLink.match(/\/(\d{4})\//);
@@ -148,6 +142,6 @@ function extractPublishedYear($: cheerio.CheerioAPI): number|null {
             return parseInt(yearMatch[1], 10);
         }
     }
-    
+
     return null;
 }
