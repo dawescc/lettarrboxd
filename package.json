@@ -1,6 +1,6 @@
 {
   "name": "lettarrboxd",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "main": "src/index.ts",
   "repository": "git@github.com:dawescc/lettarrboxd.git",
   "author": "Ryan Dawes <dev@dawes.cc>",

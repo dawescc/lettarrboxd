@@ -1,4 +1,4 @@
-import Axios, { AxiosInstance } from 'axios';
+import Axios from 'axios';
 import { loadConfig } from '../util/config';
 import { plexLimiter, itemQueue, createRateLimitedAxios } from '../util/queues';
 import { ScrapedMedia } from '../scraper';
@@ -37,61 +37,159 @@ function createPlexClient(url: string, token: string) {
     return createRateLimitedAxios(baseAxios, plexLimiter, 'Plex');
 }
 
+type RateLimitedAxios = ReturnType<typeof createRateLimitedAxios>;
+
+// Library cache - holds all items from Plex, indexed by TMDB ID
+interface LibraryCache {
+    movies: Map<string, PlexMetadata>;  // tmdbId -> metadata
+    shows: Map<string, PlexMetadata>;   // tmdbId -> metadata
+    byTitle: Map<string, PlexMetadata[]>; // lowercase title -> metadata[]
+    fetchedAt: number;
+}
+
+let libraryCache: LibraryCache | null = null;
+const LIBRARY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
- * Searches Plex for an item by its TMDB ID.
- * Uses the global search by GUID to find items across all libraries.
+ * Fetches the entire Plex library and indexes it by TMDB ID for fast lookups.
+ * Caches results for 5 minutes.
+ */
+async function getLibraryIndex(axios: RateLimitedAxios): Promise<LibraryCache> {
+    // Return cached if still valid
+    if (libraryCache && (Date.now() - libraryCache.fetchedAt) < LIBRARY_CACHE_TTL_MS) {
+        logger.debug('Using cached Plex library index');
+        return libraryCache;
+    }
+
+    logger.info('Fetching and indexing Plex library...');
+
+    const movies = new Map<string, PlexMetadata>();
+    const shows = new Map<string, PlexMetadata>();
+    const byTitle = new Map<string, PlexMetadata[]>();
+
+    try {
+        // Fetch all library items with GUIDs included
+        const response = await axios.get<PlexMediaContainer>('/library/all', {
+            params: { includeGuids: 1 }
+        });
+
+        const items = response.data?.MediaContainer?.Metadata || [];
+
+        for (const item of items) {
+            // Index by title for fallback lookups
+            const titleKey = item.title.toLowerCase();
+            if (!byTitle.has(titleKey)) {
+                byTitle.set(titleKey, []);
+            }
+            byTitle.get(titleKey)!.push(item);
+
+            // Index by TMDB ID
+            const guids = item.Guid || [];
+            for (const g of guids) {
+                // Extract TMDB ID from various formats
+                let tmdbId: string | null = null;
+
+                if (g.id.startsWith('tmdb://')) {
+                    tmdbId = g.id.replace('tmdb://', '');
+                } else if (g.id.includes('themoviedb://')) {
+                    const match = g.id.match(/themoviedb:\/\/(\d+)/);
+                    if (match) tmdbId = match[1];
+                } else if (g.id.includes('plex://movie/tmdb/') || g.id.includes('plex://show/tmdb/')) {
+                    const match = g.id.match(/tmdb\/(\d+)/);
+                    if (match) tmdbId = match[1];
+                }
+
+                if (tmdbId) {
+                    if (item.type === 'movie') {
+                        movies.set(tmdbId, item);
+                    } else if (item.type === 'show') {
+                        shows.set(tmdbId, item);
+                    }
+                }
+            }
+        }
+
+        logger.info(`Indexed Plex library: ${movies.size} movies, ${shows.size} shows`);
+
+        libraryCache = {
+            movies,
+            shows,
+            byTitle,
+            fetchedAt: Date.now()
+        };
+
+        return libraryCache;
+
+    } catch (error: any) {
+        logger.error('Failed to fetch Plex library:', error.message);
+        // Return empty cache on error
+        return {
+            movies: new Map(),
+            shows: new Map(),
+            byTitle: new Map(),
+            fetchedAt: Date.now()
+        };
+    }
+}
+
+/**
+ * Fast lookup by TMDB ID using the pre-fetched library index.
  */
 export async function findItemByTmdbId(tmdbId: string, title?: string, year?: number, type?: 'movie' | 'show', config?: any): Promise<string | null> {
     if (!config) config = loadConfig();
     if (!config.plex) return null;
 
+    // Check persistent cache first
+    const cacheKey = `plex_resolution_${tmdbId}`;
+    const cachedRatingKey = scrapeCache.get<string>(cacheKey);
+    if (cachedRatingKey) {
+        logger.debug(`[CACHE HIT] Plex: TMDB ${tmdbId} -> Key ${cachedRatingKey}`);
+        return cachedRatingKey;
+    }
+
     const { url, token } = config.plex;
     const axios = createPlexClient(url, token);
 
     try {
-        // Check Cache
-        const cacheKey = `plex_resolution_${tmdbId}`;
-        const cachedRatingKey = scrapeCache.get<string>(cacheKey);
-        if (cachedRatingKey) {
-            logger.debug(`[CACHE HIT] Plex: TMDB ${tmdbId} -> Key ${cachedRatingKey}`);
-            return cachedRatingKey;
-        }
+        const library = await getLibraryIndex(axios);
 
-        // 1. Try Legacy Agent format first
-        const legacyGuid = `com.plexapp.agents.themoviedb://${tmdbId}?lang=en`;
-        let ratingKey = await searchByGuid(axios, legacyGuid);
-        if (ratingKey) {
-            scrapeCache.set(cacheKey, ratingKey);
-            return ratingKey;
-        }
+        // 1. Direct TMDB lookup
+        let item: PlexMetadata | undefined;
 
-        // 2. Try Modern Agent format
         if (!type || type === 'movie') {
-            const movieGuid = `plex://movie/tmdb/${tmdbId}`;
-            ratingKey = await searchByGuid(axios, movieGuid);
-            if (ratingKey) {
-                scrapeCache.set(cacheKey, ratingKey);
-                return ratingKey;
-            }
+            item = library.movies.get(tmdbId);
+        }
+        if (!item && (!type || type === 'show')) {
+            item = library.shows.get(tmdbId);
         }
 
-        if (!type || type === 'show') {
-            const showGuid = `plex://show/tmdb/${tmdbId}`;
-            ratingKey = await searchByGuid(axios, showGuid);
-            if (ratingKey) {
-                scrapeCache.set(cacheKey, ratingKey);
-                return ratingKey;
-            }
+        if (item) {
+            scrapeCache.set(cacheKey, item.ratingKey);
+            return item.ratingKey;
         }
 
-        // 3. Last Resort: Search by Title
+        // 2. Fallback: Title search in the index
         if (title) {
-            logger.debug(`GUID lookup failed for TMDB ${tmdbId}. Trying title search: "${title}"`);
-            ratingKey = await searchByTitleAndId(axios, title, tmdbId, year, type);
-            if (ratingKey) {
-                logger.debug(`Found by title fallback: ${title} (Key: ${ratingKey})`);
-                scrapeCache.set(cacheKey, ratingKey);
-                return ratingKey;
+            const titleKey = title.toLowerCase();
+            const candidates = library.byTitle.get(titleKey) || [];
+
+            for (const candidate of candidates) {
+                // Filter by type if specified
+                if (type === 'movie' && candidate.type !== 'movie') continue;
+                if (type === 'show' && candidate.type !== 'show') continue;
+
+                // Check if any GUID matches the TMDB ID
+                const guids = candidate.Guid || [];
+                const hasMatch = guids.some((g: { id: string }) =>
+                    g.id === `tmdb://${tmdbId}` ||
+                    g.id.includes(`themoviedb://${tmdbId}`) ||
+                    g.id.includes(`/tmdb/${tmdbId}`)
+                );
+
+                if (hasMatch) {
+                    scrapeCache.set(cacheKey, candidate.ratingKey);
+                    return candidate.ratingKey;
+                }
             }
         }
 
@@ -102,68 +200,6 @@ export async function findItemByTmdbId(tmdbId: string, title?: string, year?: nu
         logger.error(`Error searching Plex for TMDB ID ${tmdbId}:`, error.message);
         return null;
     }
-}
-
-type RateLimitedAxios = ReturnType<typeof createRateLimitedAxios>;
-
-async function searchByGuid(axios: RateLimitedAxios, guid: string): Promise<string | null> {
-    try {
-        const response = await axios.get<PlexMediaContainer>('/library/all', {
-            params: { guid }
-        });
-
-        if (response.data?.MediaContainer?.Metadata?.length && response.data.MediaContainer.Metadata.length > 0) {
-            const item = response.data.MediaContainer.Metadata[0];
-            return item.ratingKey;
-        }
-    } catch (e) {
-        // Ignore 404s or empty results
-    }
-    return null;
-}
-
-async function searchByTitleAndId(
-    axios: RateLimitedAxios,
-    title: string,
-    tmdbId: string,
-    year?: number,
-    type?: 'movie' | 'show'
-): Promise<string | null> {
-    logger.debug(`Plex title search: ${title} (TMDB: ${tmdbId})`);
-    try {
-        const params: Record<string, any> = {
-            title,
-            includeGuids: 1
-        };
-
-        if (type === 'movie') params.type = 1;
-        if (type === 'show') params.type = 2;
-        if (year) params.year = year;
-
-        const response = await axios.get<PlexMediaContainer>('/library/all', { params });
-
-        const results = response.data?.MediaContainer?.Metadata || [];
-
-        for (const item of results) {
-            if (type === 'movie' && item.type !== 'movie') continue;
-            if (type === 'show' && item.type !== 'show') continue;
-
-            const guids = item.Guid || [];
-            const hasMatch = guids.some((g: { id: string }) =>
-                g.id === `tmdb://${tmdbId}` ||
-                g.id.includes(`//${tmdbId}?`) ||
-                g.id.includes(`//${tmdbId}`)
-            );
-
-            if (hasMatch) {
-                return item.ratingKey;
-            }
-        }
-
-    } catch (e: any) {
-        logger.debug(`Error searching by title "${title}": ${e.message}`);
-    }
-    return null;
 }
 
 /**
@@ -234,6 +270,11 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
     logger.info(`Syncing Plex labels for ${items.length} items...`);
 
     const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd';
+
+    // Pre-fetch library index ONCE before processing items
+    const { url, token } = config.plex;
+    const axios = createPlexClient(url, token);
+    await getLibraryIndex(axios);
 
     // Use itemQueue for concurrency - HTTP calls already rate-limited
     await itemQueue.addAll(items.map(item => {
