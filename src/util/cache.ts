@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite';
 import path from 'path';
 import fs from 'fs';
+import JSON5 from 'json5';
 import env from './env';
 import logger from './logger';
 
@@ -10,7 +11,7 @@ export class RequestCache {
 
     constructor(fileName: string = 'request_cache.sqlite', ttl: number = 1000 * 60 * 60 * 3) { // 3 hours default
         const dbPath = path.join(env.DATA_DIR, fileName);
-        
+
         // Ensure data directory exists
         const dir = path.dirname(dbPath);
         if (!fs.existsSync(dir)) {
@@ -33,13 +34,13 @@ export class RequestCache {
                     expiry INTEGER
                 )
             `);
-            
+
             // Create index on expiry for faster cleanup
             this.db.run(`CREATE INDEX IF NOT EXISTS idx_expiry ON cache(expiry)`);
-            
+
             // Initial cleanup
             this.cleanup();
-            
+
             logger.info('Initialized SQLite request cache.');
         } catch (e: any) {
             logger.error('Failed to initialize SQLite cache:', e);
@@ -61,7 +62,7 @@ export class RequestCache {
     public get<T>(key: string): T | undefined {
         try {
             const now = Date.now();
-            
+
             // Lazy expiration check during get
             const stmt = this.db.prepare('SELECT value, expiry FROM cache WHERE key = ?');
             const row = stmt.get(key) as { value: string, expiry: number } | undefined;
@@ -73,7 +74,7 @@ export class RequestCache {
                 return undefined;
             }
 
-            return JSON.parse(row.value) as T;
+            return JSON5.parse(row.value) as T;
         } catch (e: any) {
             logger.warn(`Cache read error for key ${key}:`, e);
             return undefined;
@@ -84,7 +85,7 @@ export class RequestCache {
         try {
             const expiry = Date.now() + this.ttl;
             const serialized = JSON.stringify(value);
-            
+
             const stmt = this.db.prepare(`
                 INSERT OR REPLACE INTO cache (key, value, expiry) VALUES (?, ?, ?)
             `);
@@ -115,7 +116,7 @@ export class RequestCache {
                 )
             `);
             logger.debug('Initialized SQLite season_map table.');
-            
+
             // Auto-migrate legacy JSON if it exists
             this.migrateLegacyJson();
         } catch (e: any) {
@@ -129,10 +130,10 @@ export class RequestCache {
             try {
                 logger.info('Found legacy serializd_cache.json. Migrating to SQLite...');
                 const raw = fs.readFileSync(legacyPath, 'utf-8');
-                const data = JSON.parse(raw);
-                
+                const data = JSON5.parse(raw);
+
                 const stmt = this.db.prepare('INSERT OR IGNORE INTO season_map (id, season_number) VALUES (?, ?)');
-                
+
                 const transaction = this.db.transaction((entries: [string, number][]) => {
                     for (const [id, num] of entries) {
                         stmt.run(id, num);
@@ -141,13 +142,13 @@ export class RequestCache {
 
                 const entries = Object.entries(data).map(([k, v]) => [k, Number(v)] as [string, number]);
                 transaction(entries);
-                
+
                 logger.info(`Migrated ${entries.length} season mappings to SQLite.`);
-                
+
                 // Rename legacy file to .bak to ensure we don't re-read it, but keep backup just in case
                 fs.renameSync(legacyPath, legacyPath + '.bak');
                 logger.info('Renamed legacy cache file to serializd_cache.json.bak');
-                
+
             } catch (e: any) {
                 logger.error('Failed to migrate legacy JSON cache:', e);
             }

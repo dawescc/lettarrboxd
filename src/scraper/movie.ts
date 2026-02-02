@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import JSON5 from 'json5';
 import { LETTERBOXD_BASE_URL, LetterboxdMovie } from ".";
 import logger from '../util/logger';
 import { scrapeCache } from '../util/cache';
@@ -71,7 +72,7 @@ function extractRating($: cheerio.CheerioAPI): number | null {
     try {
         const jsonLdScript = $('script[type="application/ld+json"]');
         if (jsonLdScript.length) {
-            const data = JSON.parse(jsonLdScript.first().html() || '{}');
+            const data = JSON5.parse(jsonLdScript.first().html() || '{}');
             if (data.aggregateRating && data.aggregateRating.ratingValue) {
                 return parseFloat(data.aggregateRating.ratingValue);
             }
