@@ -66,6 +66,47 @@ export const plexLimiter = new Bottleneck({
 });
 
 // ============================================================================
+// ERROR HANDLERS - Prevent queue hangs from unhandled rejections
+// ============================================================================
+
+radarrLimiter.on('error', (err) => {
+    logger.error('[Radarr Limiter] Unhandled error in queue:', err);
+});
+
+sonarrLimiter.on('error', (err) => {
+    logger.error('[Sonarr Limiter] Unhandled error in queue:', err);
+});
+
+scraperLimiter.on('error', (err) => {
+    logger.error('[Scraper Limiter] Unhandled error in queue:', err);
+});
+
+plexLimiter.on('error', (err) => {
+    logger.error('[Plex Limiter] Unhandled error in queue:', err);
+});
+
+// Log failed jobs for debugging
+radarrLimiter.on('failed', (err, jobInfo) => {
+    logger.warn(`[Radarr] Job failed: ${err.message}`);
+    return null; // Don't retry within Bottleneck, retry logic is in retryOperation
+});
+
+sonarrLimiter.on('failed', (err, jobInfo) => {
+    logger.warn(`[Sonarr] Job failed: ${err.message}`);
+    return null;
+});
+
+scraperLimiter.on('failed', (err, jobInfo) => {
+    logger.warn(`[Scraper] Job failed: ${err.message}`);
+    return null;
+});
+
+plexLimiter.on('failed', (err, jobInfo) => {
+    logger.warn(`[Plex] Job failed: ${err.message}`);
+    return null;
+});
+
+// ============================================================================
 // RATE-LIMITED AXIOS FACTORIES
 // ============================================================================
 
