@@ -158,17 +158,21 @@ async function main() {
     checkCancel(shouldBump);
 
     if (shouldBump) {
-      const [major, minor, patchStr] = version.split(".");
-      const patch = parseInt(patchStr, 10);
-      const nextPatch = !isNaN(patch) ? `${major}.${minor}.${patch + 1}` : version;
+      // Increment the LAST segment of the version (e.g., 2.7.2 → 2.7.3, 2.7.2.1 → 2.7.2.2)
+      const parts = version.split(".");
+      const lastIdx = parts.length - 1;
+      const lastPart = parseInt(parts[lastIdx], 10);
+      const nextVersion = !isNaN(lastPart)
+        ? [...parts.slice(0, lastIdx), lastPart + 1].join(".")
+        : version;
 
       const newVersionInput = await text({
         message: "Enter new version:",
-        placeholder: nextPatch,
+        placeholder: nextVersion,
       });
       checkCancel(newVersionInput);
 
-      const versionString = String(newVersionInput) || nextPatch;
+      const versionString = String(newVersionInput) || nextVersion;
 
       const s = spinner();
       s.start("Updating files...");
@@ -383,6 +387,83 @@ async function main() {
     s.stop("Git sync complete");
     summary.push("Pushed commits to origin");
     if (tagged) summary.push(`Pushed tags to origin`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 9: GitHub Release (optional)
+  // ═══════════════════════════════════════════════════════════════════
+  if (tagged) {
+    const shouldCreateRelease = await confirm({
+      message: `Create GitHub Release for v${releaseVersion}?`,
+      initialValue: false,
+    });
+    checkCancel(shouldCreateRelease);
+
+    if (shouldCreateRelease) {
+      // Step 1: Open editor for release notes (always, even in dry-run)
+      const tmpNotesFile = path.join(process.cwd(), ".release-notes.tmp.md");
+      const defaultNotes = `# Release v${releaseVersion}\n\n<!-- Write your release notes here. Save and close to continue. -->\n\n`;
+
+      fs.writeFileSync(tmpNotesFile, defaultNotes);
+
+      // Detect editor: prefer $EDITOR, fallback to code --wait, then vim
+      const editor = process.env.EDITOR || process.env.VISUAL || "code";
+      const editorArgs = editor.includes("code") ? ["--wait", tmpNotesFile] : [tmpNotesFile];
+
+      note(`Opening ${editor} for release notes...`, "Editor");
+
+      const editorProc = spawn({
+        cmd: [editor, ...editorArgs],
+        stdout: "inherit",
+        stderr: "inherit",
+        stdin: "inherit",
+      });
+      await editorProc.exited;
+
+      // Read the notes back and clean up
+      let releaseNotes = fs.readFileSync(tmpNotesFile, "utf8");
+
+      // Strip HTML comments (like the placeholder instructions)
+      releaseNotes = releaseNotes.replace(/<!--[\s\S]*?-->/g, "").trim();
+
+      // Clean up temp file
+      fs.unlinkSync(tmpNotesFile);
+
+      // Step 2: Create release with notes (skip in dry-run)
+      const ghArgs = [
+        "release", "create",
+        `v${releaseVersion}`,
+        "--title", `v${releaseVersion}`,
+        "--notes", releaseNotes,
+      ];
+
+      // Mark as prerelease for non-stable channels
+      if (selectedChannel !== "latest") {
+        ghArgs.push("--prerelease");
+      }
+
+      if (IS_DRY_RUN) {
+        note(`[DRY RUN] Would create release with notes:\n${releaseNotes.slice(0, 200)}...`, "GitHub Release");
+      } else {
+        const s = spinner();
+        s.start("Creating GitHub release...");
+
+        const p = spawn({
+          cmd: ["gh", ...ghArgs],
+          stdout: "inherit",
+          stderr: "inherit",
+        });
+        const exitCode = await p.exited;
+
+        if (exitCode !== 0) {
+          s.stop("Release creation failed");
+          note("GitHub release creation failed.", "Warning");
+        } else {
+          s.stop("GitHub release created!");
+          summary.push(`Created GitHub release v${releaseVersion}`);
+        }
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════
