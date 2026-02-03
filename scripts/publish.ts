@@ -84,8 +84,8 @@ async function getTagsOnCommit(sha: string): Promise<string[]> {
 
 // Helper: Parse tag to extract version and channel
 function parseTag(tag: string): { version: string; channel: string } | null {
-  // Expected format: v1.2.3 or v1.2.3-channel
-  const match = tag.match(/^v?(\d+\.\d+\.\d+)(?:-(.+))?$/);
+  // Expected format: v1.2.3 or v1.2.3.4-channel (supports any number of version segments)
+  const match = tag.match(/^v?([\d.]+)(?:-(.+))?$/);
   if (!match) return null;
   return {
     version: match[1],
@@ -345,9 +345,9 @@ async function main() {
 
     await run("docker", ["buildx", "build",
       "--platform", "linux/amd64,linux/arm64",
+      "--provenance=false",
       "--push",
       "--build-arg", `COMMIT_SHA=${cleanSha}`,
-      "--annotation", "index:org.opencontainers.image.description=Automatically add movies and series from Letterboxd and Serializd to Radarr and Sonarr.",
       "--tag", `ghcr.io/dawescc/lettarrboxd:${releaseVersion}`,
       "--tag", `ghcr.io/dawescc/lettarrboxd:${selectedChannel}`,
       "."
