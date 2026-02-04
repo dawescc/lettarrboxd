@@ -11,7 +11,7 @@ import { syncSeries } from './api/sonarr';
 import * as plex from './api/plex';
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
 import { TAG_LETTERBOXD, TAG_SERIALIZD } from './util/constants';
-import { masterQueue, listQueue } from './util/queues';
+import { movieListQueue, tvListQueue } from './util/queues';
 
 // Types for our generic processor
 interface BaseListConfig {
@@ -79,8 +79,8 @@ export async function syncMoviesFromLists(
 
     logger.info(`Processing ${lists.length} Letterboxd lists...`);
 
-    // Use listQueue for list processing
-    await listQueue.addAll(lists.map(list => async () => {
+    // Use movieListQueue for list processing (separate from TV)
+    await movieListQueue.addAll(lists.map(list => async () => {
         if (!isListActive(list)) {
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
@@ -229,8 +229,8 @@ export async function syncShowsFromLists(
 
     logger.info(`Processing ${lists.length} Serializd lists...`);
 
-    // Use listQueue for list processing
-    await listQueue.addAll(lists.map(list => async () => {
+    // Use tvListQueue for list processing (separate from movies)
+    await tvListQueue.addAll(lists.map(list => async () => {
         if (!isListActive(list)) {
             logger.info(`Skipping inactive list: ${list.id || list.url}`);
             return;
@@ -334,13 +334,14 @@ export async function run() {
 
     logger.info('Starting sync...');
 
-    // Use masterQueue to run movies and shows in parallel
-    await masterQueue.addAll([
-        () => syncMoviesFromLists(
+    // Run movies and shows as completely separate parallel operations
+    // Each uses its own queues, so they cannot interfere with each other
+    await Promise.all([
+        syncMoviesFromLists(
             currentConfig.letterboxd,
             currentConfig.radarr?.tags || []
         ),
-        () => syncShowsFromLists(
+        syncShowsFromLists(
             currentConfig.serializd,
             currentConfig.sonarr?.tags || []
         )

@@ -6,7 +6,7 @@ import { ScrapedSeries } from '../scraper';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
 import { resolveTagsForItems } from '../util/tagHelper';
-import { sonarrLimiter, itemQueue, createRateLimitedAxios } from '../util/queues';
+import { sonarrLimiter, tvItemQueue, createRateLimitedAxios } from '../util/queues';
 
 // Types
 export interface SonarrSeason {
@@ -453,8 +453,8 @@ async function processLibraryCleanup(
 
     if (seriesToRemove.length > 0) {
         logger.info(`Found ${seriesToRemove.length} series to remove.`);
-        // Use itemQueue for concurrency - HTTP calls already rate-limited
-        await itemQueue.addAll(seriesToRemove.map(s =>
+        // Use tvItemQueue for concurrency - HTTP calls already rate-limited
+        await tvItemQueue.addAll(seriesToRemove.map(s =>
             () => deleteSeries(s.id, s.title)
         ));
     } else {
@@ -502,8 +502,8 @@ export async function syncSeries(seriesList: ScrapedSeries[], managedTags: Set<s
     }
 
     logger.info(`Processing ${seriesList.length} series from Serializd...`);
-    // Use itemQueue for concurrency - HTTP calls already rate-limited
-    const results = await itemQueue.addAll(seriesList.map(item => {
+    // Use tvItemQueue for concurrency - HTTP calls already rate-limited
+    const results = await tvItemQueue.addAll(seriesList.map(item => {
         return async () => {
             try {
                 const result = await withTimeout(

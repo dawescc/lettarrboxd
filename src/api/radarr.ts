@@ -5,7 +5,7 @@ import logger from '../util/logger';
 import { LetterboxdMovie } from '../scraper';
 import { retryOperation } from '../util/retry';
 import { calculateNextTagIds } from '../util/tagLogic';
-import { radarrLimiter, itemQueue, createRateLimitedAxios } from '../util/queues';
+import { radarrLimiter, movieItemQueue, createRateLimitedAxios } from '../util/queues';
 import { resolveTagsForItems } from '../util/tagHelper';
 
 // Types
@@ -318,8 +318,8 @@ async function processLibraryCleanup(
 
     if (moviesToRemove.length > 0) {
         logger.info(`Found ${moviesToRemove.length} movies to remove.`);
-        // Use itemQueue for concurrency control - HTTP calls are already rate-limited
-        await itemQueue.addAll(moviesToRemove.map(movie =>
+        // Use movieItemQueue for concurrency control - HTTP calls are already rate-limited
+        await movieItemQueue.addAll(moviesToRemove.map(movie =>
             () => deleteMovie(movie.id, movie.title)
         ));
     } else {
@@ -348,8 +348,8 @@ export async function syncMovies(movies: LetterboxdMovie[], managedTags: Set<str
     logger.info(`Found ${existingMovies.length} existing movies in Radarr.`);
 
     logger.info(`Processing ${movies.length} movies from Letterboxd...`);
-    // Use itemQueue for concurrency - HTTP calls are already rate-limited via axios wrapper
-    await itemQueue.addAll(movies.map(movie =>
+    // Use movieItemQueue for concurrency - HTTP calls are already rate-limited via axios wrapper
+    await movieItemQueue.addAll(movies.map(movie =>
         () => processMovieSync(movie, context, existingMoviesMap)
     ));
     logger.info(`Finished processing movies.`);

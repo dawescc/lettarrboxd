@@ -3,7 +3,7 @@ import JSON5 from 'json5';
 import { LETTERBOXD_BASE_URL, LetterboxdMovie } from ".";
 import logger from '../util/logger';
 import { scrapeCache } from '../util/cache';
-import { rateLimitedFetch } from '../util/queues';
+import { letterboxdFetch } from '../util/queues';
 
 /**
  * Obtain details of a movie.
@@ -25,7 +25,7 @@ export async function getMovie(link: string): Promise<LetterboxdMovie> {
 
     try {
         // Use rate-limited fetch - automatically queued through Bottleneck
-        const response = await rateLimitedFetch(movieUrl, { signal: controller.signal });
+        const response = await letterboxdFetch(movieUrl, { signal: controller.signal });
         clearTimeout(timeoutId);
 
         if (!response.ok) {

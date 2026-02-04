@@ -1,6 +1,6 @@
 import Axios from 'axios';
 import { loadConfig } from '../util/config';
-import { plexLimiter, itemQueue, createRateLimitedAxios } from '../util/queues';
+import { plexMovieLimiter, plexTvLimiter, movieItemQueue, tvItemQueue, createRateLimitedAxios } from '../util/queues';
 import { ScrapedMedia } from '../scraper';
 import logger from '../util/logger';
 import { retryOperation } from '../util/retry';
@@ -23,8 +23,14 @@ interface PlexMediaContainer {
     };
 }
 
-// Create rate-limited Plex client factory
-function createPlexClient(url: string, token: string) {
+/**
+ * Creates a rate-limited Plex client.
+ * 
+ * @param url - Plex server URL
+ * @param token - Plex authentication token
+ * @param limiter - The Bottleneck limiter to use (movie or TV)
+ */
+function createPlexClient(url: string, token: string, limiter: typeof plexMovieLimiter) {
     const baseAxios = Axios.create({
         baseURL: url,
         headers: {
@@ -34,7 +40,7 @@ function createPlexClient(url: string, token: string) {
         timeout: 30000
     });
 
-    return createRateLimitedAxios(baseAxios, plexLimiter, 'Plex');
+    return createRateLimitedAxios(baseAxios, limiter, 'Plex');
 }
 
 type RateLimitedAxios = ReturnType<typeof createRateLimitedAxios>;
@@ -148,7 +154,9 @@ export async function findItemByTmdbId(tmdbId: string, title?: string, year?: nu
     }
 
     const { url, token } = config.plex;
-    const axios = createPlexClient(url, token);
+    // Use movie limiter by default, TV limiter for shows
+    const limiter = type === 'show' ? plexTvLimiter : plexMovieLimiter;
+    const axios = createPlexClient(url, token, limiter);
 
     try {
         const library = await getLibraryIndex(axios);
@@ -209,7 +217,8 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
     if (!config) config = loadConfig();
     if (!config.plex) return;
     const { url, token } = config.plex;
-    const axios = createPlexClient(url, token);
+    const limiter = typeHint === 'show' ? plexTvLimiter : plexMovieLimiter;
+    const axios = createPlexClient(url, token, limiter);
 
     try {
         await retryOperation(async () => {
@@ -262,6 +271,9 @@ export async function syncLabels(ratingKey: string, targetLabels: string[], mana
 
 /**
  * Syncs tags for a batch of items in parallel.
+ * 
+ * Uses movie or TV queues based on typeHint to ensure
+ * movie and TV syncs don't interfere with each other.
  */
 export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] = [], managedTags: Set<string>, typeHint?: 'movie' | 'show') {
     const config = loadConfig();
@@ -271,12 +283,16 @@ export async function syncPlexTags(items: ScrapedMedia[], globalTags: string[] =
 
     const systemOwnerLabel = typeHint === 'movie' ? 'letterboxd' : 'serializd';
 
+    // Select appropriate queue and limiter based on type
+    const itemQueue = typeHint === 'show' ? tvItemQueue : movieItemQueue;
+    const limiter = typeHint === 'show' ? plexTvLimiter : plexMovieLimiter;
+
     // Pre-fetch library index ONCE before processing items
     const { url, token } = config.plex;
-    const axios = createPlexClient(url, token);
+    const axios = createPlexClient(url, token, limiter);
     await getLibraryIndex(axios);
 
-    // Use itemQueue for concurrency - HTTP calls already rate-limited
+    // Use appropriate queue for concurrency - HTTP calls already rate-limited
     await itemQueue.addAll(items.map(item => {
         return async () => {
             if (!item.tmdbId) return;

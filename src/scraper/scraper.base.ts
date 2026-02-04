@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { itemQueue, rateLimitedFetch } from '../util/queues';
+import { movieItemQueue, letterboxdFetch } from '../util/queues';
 import { LetterboxdMovie, LETTERBOXD_BASE_URL } from ".";
 import { getMovie } from './movie';
 import logger from '../util/logger';
@@ -52,7 +52,7 @@ export abstract class BaseScraper implements Scraper {
         logger.info(`Processing ${linksToProcess.length} movie links...`);
 
         // Use itemQueue for concurrency - HTTP calls already rate-limited via rateLimitedFetch
-        const movies = await itemQueue.addAll(linksToProcess.map(link => {
+        const movies = await movieItemQueue.addAll(linksToProcess.map(link => {
             return async () => {
                 try {
                     logger.debug(`Processing: ${link}`);
@@ -123,7 +123,7 @@ export abstract class BaseScraper implements Scraper {
 
             try {
                 // Use rate-limited fetch - automatically queued through Bottleneck
-                const response = await rateLimitedFetch(url, { signal: controller.signal });
+                const response = await letterboxdFetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
 
                 if (!response.ok) {

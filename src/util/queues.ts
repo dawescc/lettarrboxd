@@ -3,36 +3,56 @@ import Bottleneck from 'bottleneck';
 import Axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import logger from './logger';
 
-// ============================================================================
-// P-QUEUE: Job Concurrency Control
-// ============================================================================
-
 /**
- * Master Queue - Top level job orchestration
- * Controls parallel execution of major sync jobs (movies, shows)
+ * Movie List Queue
+ * 
+ * Controls concurrent processing of Letterboxd lists.
+ * Each list fetch runs as a separate task in this queue.
  */
-export const masterQueue = new PQueue({ concurrency: 2 });
+export const movieListQueue = new PQueue({ concurrency: 2 });
 
 /**
- * List Processing Queue
- * Limits how many lists are fetched/processed in parallel.
+ * Movie Item Queue
+ * 
+ * Controls concurrent processing of individual movies.
+ * Used for scraping movie details, Radarr sync operations, and Plex movie label sync.
  */
-export const listQueue = new PQueue({ concurrency: 2 });
+export const movieItemQueue = new PQueue({ concurrency: 20 });
 
 /**
- * Item Processing Queue
- * Limits how many items (movies/shows) are processed concurrently system-wide.
- * Prevents memory bloat from thousands of pending promises.
+ * TV List Queue
+ * 
+ * Controls concurrent processing of Serializd lists.
+ * Completely separate from movie queues to prevent interference.
  */
-export const itemQueue = new PQueue({ concurrency: 20 });
-
-// ============================================================================
-// BOTTLENECK: HTTP Rate Limiting
-// ============================================================================
+export const tvListQueue = new PQueue({ concurrency: 2 });
 
 /**
- * Radarr Rate Limiter
- * Max 3 concurrent requests, min 100ms between requests.
+ * TV Item Queue
+ * 
+ * Controls concurrent processing of individual TV shows.
+ * Used for scraping show details, Sonarr sync operations, and Plex show label sync.
+ */
+export const tvItemQueue = new PQueue({ concurrency: 20 });
+
+/**
+ * Letterboxd HTTP Rate Limiter
+ * 
+ * Limits requests to Letterboxd to avoid being blocked.
+ * - maxConcurrent: 5 simultaneous requests
+ * - minTime: 200ms between request starts
+ */
+export const letterboxdLimiter = new Bottleneck({
+    maxConcurrent: 5,
+    minTime: 200
+});
+
+/**
+ * Radarr HTTP Rate Limiter
+ * 
+ * Limits requests to Radarr API.
+ * - maxConcurrent: 3 simultaneous requests
+ * - minTime: 100ms between request starts
  */
 export const radarrLimiter = new Bottleneck({
     maxConcurrent: 3,
@@ -40,8 +60,34 @@ export const radarrLimiter = new Bottleneck({
 });
 
 /**
- * Sonarr Rate Limiter
- * Max 3 concurrent requests, min 100ms between requests.
+ * Plex Movie HTTP Rate Limiter
+ * 
+ * Limits requests to Plex for movie-related operations.
+ * Separate from TV to prevent movies blocking shows.
+ */
+export const plexMovieLimiter = new Bottleneck({
+    maxConcurrent: 5,
+    minTime: 100
+});
+
+/**
+ * Serializd HTTP Rate Limiter
+ * 
+ * Limits requests to Serializd API.
+ * - maxConcurrent: 5 simultaneous requests
+ * - minTime: 200ms between request starts
+ */
+export const serializdLimiter = new Bottleneck({
+    maxConcurrent: 5,
+    minTime: 200
+});
+
+/**
+ * Sonarr HTTP Rate Limiter
+ * 
+ * Limits requests to Sonarr API.
+ * - maxConcurrent: 3 simultaneous requests
+ * - minTime: 100ms between request starts
  */
 export const sonarrLimiter = new Bottleneck({
     maxConcurrent: 3,
@@ -49,66 +95,71 @@ export const sonarrLimiter = new Bottleneck({
 });
 
 /**
- * Scraper Rate Limiter
- * Min 200ms between requests (approx 5 req/sec).
+ * Plex TV HTTP Rate Limiter
+ * 
+ * Limits requests to Plex for TV-related operations.
+ * Separate from movies to prevent shows blocking movies.
  */
-export const scraperLimiter = new Bottleneck({
-    minTime: 200
-});
-
-/**
- * Plex Rate Limiter
- * Max 5 concurrent, min 100ms between.
- */
-export const plexLimiter = new Bottleneck({
+export const plexTvLimiter = new Bottleneck({
     maxConcurrent: 5,
     minTime: 100
 });
 
-// ============================================================================
-// ERROR HANDLERS - Prevent queue hangs from unhandled rejections
-// ============================================================================
+// Error handlers to prevent silent failures
+letterboxdLimiter.on('error', (err) => {
+    logger.error('[Letterboxd Limiter] Unhandled error:', err);
+});
 
 radarrLimiter.on('error', (err) => {
-    logger.error('[Radarr Limiter] Unhandled error in queue:', err);
+    logger.error('[Radarr Limiter] Unhandled error:', err);
+});
+
+plexMovieLimiter.on('error', (err) => {
+    logger.error('[Plex Movie Limiter] Unhandled error:', err);
+});
+
+serializdLimiter.on('error', (err) => {
+    logger.error('[Serializd Limiter] Unhandled error:', err);
 });
 
 sonarrLimiter.on('error', (err) => {
-    logger.error('[Sonarr Limiter] Unhandled error in queue:', err);
+    logger.error('[Sonarr Limiter] Unhandled error:', err);
 });
 
-scraperLimiter.on('error', (err) => {
-    logger.error('[Scraper Limiter] Unhandled error in queue:', err);
+plexTvLimiter.on('error', (err) => {
+    logger.error('[Plex TV Limiter] Unhandled error:', err);
 });
 
-plexLimiter.on('error', (err) => {
-    logger.error('[Plex Limiter] Unhandled error in queue:', err);
+// Failed job handlers for debugging
+letterboxdLimiter.on('failed', (err) => {
+    logger.warn(`[Letterboxd] Job failed: ${err.message}`);
+    return null;
 });
 
-// Log failed jobs for debugging
-radarrLimiter.on('failed', (err, jobInfo) => {
+radarrLimiter.on('failed', (err) => {
     logger.warn(`[Radarr] Job failed: ${err.message}`);
-    return null; // Don't retry within Bottleneck, retry logic is in retryOperation
+    return null;
 });
 
-sonarrLimiter.on('failed', (err, jobInfo) => {
+plexMovieLimiter.on('failed', (err) => {
+    logger.warn(`[Plex Movie] Job failed: ${err.message}`);
+    return null;
+});
+
+serializdLimiter.on('failed', (err) => {
+    logger.warn(`[Serializd] Job failed: ${err.message}`);
+    return null;
+});
+
+sonarrLimiter.on('failed', (err) => {
     logger.warn(`[Sonarr] Job failed: ${err.message}`);
     return null;
 });
 
-scraperLimiter.on('failed', (err, jobInfo) => {
-    logger.warn(`[Scraper] Job failed: ${err.message}`);
+plexTvLimiter.on('failed', (err) => {
+    logger.warn(`[Plex TV] Job failed: ${err.message}`);
     return null;
 });
-
-plexLimiter.on('failed', (err, jobInfo) => {
-    logger.warn(`[Plex] Job failed: ${err.message}`);
-    return null;
-});
-
-// ============================================================================
-// RATE-LIMITED AXIOS FACTORIES
-// ============================================================================
 
 type AxiosMethod = 'get' | 'post' | 'put' | 'delete';
 
@@ -120,8 +171,15 @@ interface RateLimitedAxios {
 }
 
 /**
- * Creates a rate-limited axios instance using the provided limiter.
- * All HTTP calls through this instance will be queued through Bottleneck.
+ * Creates a rate-limited axios instance.
+ * 
+ * All HTTP calls through this instance are queued through the provided
+ * Bottleneck limiter, ensuring rate limits are respected.
+ * 
+ * @param baseAxios - The base axios instance with baseURL and headers configured
+ * @param limiter - The Bottleneck limiter to use for rate limiting
+ * @param serviceName - Name for logging purposes
+ * @returns A rate-limited axios-like object
  */
 export function createRateLimitedAxios(
     baseAxios: ReturnType<typeof Axios.create>,
@@ -149,8 +207,14 @@ export function createRateLimitedAxios(
 }
 
 /**
- * Creates a rate-limited fetch function for scrapers.
- * All fetch calls through this will be queued through Bottleneck.
+ * Creates a rate-limited fetch function.
+ * 
+ * All fetch calls through this function are queued through the provided
+ * Bottleneck limiter.
+ * 
+ * @param limiter - The Bottleneck limiter to use
+ * @param serviceName - Name for logging purposes
+ * @returns A rate-limited fetch function
  */
 export function createRateLimitedFetch(limiter: Bottleneck, serviceName: string) {
     return (url: string, options?: RequestInit): Promise<Response> => {
@@ -159,5 +223,12 @@ export function createRateLimitedFetch(limiter: Bottleneck, serviceName: string)
     };
 }
 
-// Pre-configured for scrapers (used in movie.ts, scraper.base.ts)
-export const rateLimitedFetch = createRateLimitedFetch(scraperLimiter, 'Scraper');
+/**
+ * Pre-configured rate-limited fetch for Letterboxd scraping.
+ */
+export const letterboxdFetch = createRateLimitedFetch(letterboxdLimiter, 'Letterboxd');
+
+/**
+ * Pre-configured rate-limited fetch for Serializd scraping.
+ */
+export const serializdFetch = createRateLimitedFetch(serializdLimiter, 'Serializd');

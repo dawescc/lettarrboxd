@@ -1,5 +1,5 @@
 import Axios from 'axios';
-import { scraperLimiter, itemQueue, createRateLimitedAxios } from '../util/queues';
+import { serializdLimiter, tvItemQueue, createRateLimitedAxios } from '../util/queues';
 import logger from '../util/logger';
 import { scrapeCache } from '../util/cache';
 import { ScrapedSeries } from './index';
@@ -35,7 +35,7 @@ const baseAxios = Axios.create({
     timeout: 30000
 });
 
-const axios = createRateLimitedAxios(baseAxios, scraperLimiter, 'Serializd');
+const axios = createRateLimitedAxios(baseAxios, serializdLimiter, 'Serializd');
 
 export class SerializdScraper {
     private baseUrl: string;
@@ -138,8 +138,8 @@ export class SerializdScraper {
 
             logger.info(`Found ${allItems.length} items in Serializd watchlist.`);
 
-            // Use itemQueue for concurrency - HTTP calls already rate-limited
-            const seriesPromise = await itemQueue.addAll(allItems.map(item => {
+            // Use tvItemQueue for concurrency - HTTP calls already rate-limited
+            const seriesPromise = await tvItemQueue.addAll(allItems.map(item => {
                 return async () => {
                     try {
                         let seasons: number[] = [];
