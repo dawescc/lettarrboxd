@@ -1,379 +1,109 @@
 require('dotenv').config();
 
-
 import env from './util/env';
-import config, { loadConfig } from './util/config';
+import { loadConfig } from './util/config';
 import logger from './util/logger';
-import { isListActive } from './util/schedule';
-import { fetchMoviesFromUrl, ScrapedMedia, LetterboxdMovie, ScrapedSeries } from './scraper';
-import { syncMovies } from './api/radarr';
-import { SerializdScraper } from './scraper/serializd';
-import { syncSeries } from './api/sonarr';
-import * as plex from './api/plex';
+import { scrape as scrapeLetterboxd } from './scraper/letterboxd';
+import { scrape as scrapeSerializd } from './scraper/serializd';
+import { sync as syncRadarr } from './radarr';
+import { sync as syncSonarr } from './sonarr';
+import { syncTags as syncPlex, prefetchLibrary as prefetchPlexLibrary } from './plex';
 import { startHealthServer, setAppStatus, updateComponentStatus } from './api/health';
 import { TAG_LETTERBOXD, TAG_SERIALIZD } from './util/constants';
 
-// Types for our generic processor
-interface BaseListConfig {
-    id?: string;
-    url: string;
-    tags: string[];
-    activeFrom?: string;
-    activeUntil?: string;
-    filters?: {
-        minRating?: number;
-        minYear?: number;
-        maxYear?: number;
-    };
-    takeAmount?: number;
-    takeStrategy?: 'oldest' | 'newest';
-    qualityProfile?: string;
-}
+async function run() {
+    const config = loadConfig();
+    logger.info('Starting sync...');
 
-function startScheduledMonitoring(): void {
-  // Run immediately on startup
-  setAppStatus('syncing');
-  run().catch(e => {
-      logger.error('Fatal error in initial run:', e);
-  }).finally(() => {
-    setAppStatus('idle');
-    scheduleNextRun();
-  });
-  
-  logger.info(`Scheduled to run every ${env.CHECK_INTERVAL_MINUTES} minutes`);
+    // Kick off the Plex library index in the background — it'll be warm by the time we need it
+    prefetchPlexLibrary();
+
+    // Step 1: Scrape sources in parallel
+    const [movies, shows] = await Promise.all([
+        config.letterboxd.length
+            ? scrapeLetterboxd(config.letterboxd)
+                .then(r => { updateComponentStatus('letterboxd', 'ok', `${r.items.length} movies`); return r; })
+                .catch((e: any) => { updateComponentStatus('letterboxd', 'error', e.message); logger.error('Letterboxd scrape failed:', e); return null; })
+            : Promise.resolve(null),
+        config.serializd.length
+            ? scrapeSerializd(config.serializd)
+                .then(r => { updateComponentStatus('serializd', 'ok', `${r.items.length} shows`); return r; })
+                .catch((e: any) => { updateComponentStatus('serializd', 'error', e.message); logger.error('Serializd scrape failed:', e); return null; })
+            : Promise.resolve(null),
+    ]);
+
+    // Step 2: Push to *arr in parallel — returns set of TMDB IDs already in library
+    const [existingMovieTmdbIds, existingShowTmdbIds] = await Promise.all([
+        movies
+            ? syncRadarr(movies.items, movies)
+                .then(ids => { updateComponentStatus('radarr', 'ok'); return ids; })
+                .catch((e: any) => {
+                    updateComponentStatus('radarr', 'error', e.message);
+                    logger.error('Radarr sync failed:', e);
+                    throw e;
+                })
+            : Promise.resolve(new Set<string>()),
+        shows
+            ? syncSonarr(shows.items, shows)
+                .then(ids => { updateComponentStatus('sonarr', 'ok'); return ids; })
+                .catch((e: any) => {
+                    updateComponentStatus('sonarr', 'error', e.message);
+                    logger.error('Sonarr sync failed:', e);
+                    throw e;
+                })
+            : Promise.resolve(new Set<string>()),
+    ]);
+
+    // Step 3: Plex — one pass, after both arr syncs, only items that already existed
+    if (config.plex && (movies || shows)) {
+        try {
+            const plexCfg = config.plex;
+            if (movies) {
+                const plexItems = movies.items.filter(i => existingMovieTmdbIds.has(i.tmdbId));
+                logger.info(`Plex movie sync: ${plexItems.length}/${movies.items.length} already in Radarr library.`);
+                const globalTags = [...(plexCfg.tags ?? []), ...(config.radarr?.tags ?? []), TAG_LETTERBOXD];
+                const managedTags = new Set([...movies.managedTags, ...globalTags]);
+                await syncPlex(plexItems, globalTags, managedTags, 'movie');
+            }
+            if (shows) {
+                const plexItems = shows.items.filter(i => existingShowTmdbIds.has(i.tmdbId));
+                logger.info(`Plex show sync: ${plexItems.length}/${shows.items.length} already in Sonarr library.`);
+                const globalTags = [...(plexCfg.tags ?? []), ...(config.sonarr?.tags ?? []), TAG_SERIALIZD];
+                const managedTags = new Set([...shows.managedTags, ...globalTags]);
+                await syncPlex(plexItems, globalTags, managedTags, 'show');
+            }
+            updateComponentStatus('plex', 'ok');
+        } catch (e: any) {
+            updateComponentStatus('plex', 'error', e.message);
+            logger.error('Plex sync failed:', e);
+        }
+    }
+
+    logger.info('Sync complete.');
 }
 
 function scheduleNextRun() {
-  const intervalMs = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
-  setTimeout(() => {
+    const ms = env.CHECK_INTERVAL_MINUTES * 60 * 1000;
+    setTimeout(() => {
+        setAppStatus('syncing');
+        run().catch(e => logger.error('Fatal error in run:', e)).finally(() => {
+            setAppStatus('idle');
+            scheduleNextRun();
+        });
+    }, ms);
+    logger.info(`Next run: ${new Date(Date.now() + ms).toLocaleString()}`);
+}
+
+async function main() {
+    startHealthServer(3000);
+    logger.info('Application started.');
     setAppStatus('syncing');
-    run().catch(e => {
-        logger.error('Fatal error in scheduled run:', e);
-    }).finally(() => {
-      setAppStatus('idle');
-      scheduleNextRun();
+    run().catch(e => logger.error('Fatal error in initial run:', e)).finally(() => {
+        setAppStatus('idle');
+        scheduleNextRun();
     });
-  }, intervalMs);
-  
-  const nextRun = new Date(Date.now() + intervalMs);
-  logger.info(`Next run scheduled for: ${nextRun.toLocaleString()}`);
 }
-
-/**
- * Process Movie Lists (Letterboxd -> Radarr)
- */
-import { listQueue } from './util/queues';
-
-// Use listQueue for fetching lists to prevent fan-out
-
-export async function syncMoviesFromLists(
-    lists: BaseListConfig[],
-    plexGlobalTags: string[]
-) {
-    if (lists.length === 0) {
-        updateComponentStatus('letterboxd', 'disabled');
-        return;
-    }
-
-    const potentialManagedTags = new Set<string>();
-    const unsafeTags = new Set<string>();
-    let hasError = false;
-    let abortCleanup = false;
-
-    const allItems = new Map<string, LetterboxdMovie>(); // TMDB ID -> Movie
-
-    logger.info(`Processing ${lists.length} Letterboxd lists...`);
-
-    await Promise.all(lists.map(list => listQueue.add(async () => {
-        if (!isListActive(list)) {
-
-            logger.info(`Skipping inactive list: ${list.id || list.url}`);
-            return;
-        }
-
-        try {
-            logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            logger.debug(`Fetching list: ${list.url}`);
-            
-            // Letterboxd Fetcher + Filter Logic
-            const { items: movies, hasErrors: listHasErrors } = await fetchMoviesFromUrl(list.url, list.takeAmount, list.takeStrategy);
-            
-            // Apply Filters (Specific to Movies)
-            let filteredMovies = movies;
-            if (list.filters) {
-                const initialCount = movies.length;
-                filteredMovies = movies.filter(movie => {
-                    const { minRating, minYear, maxYear } = list.filters!;
-                    
-                    if (minRating !== undefined && (movie.rating === undefined || movie.rating === null || movie.rating < minRating)) return false;
-                    if (minYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear < minYear)) return false;
-                    if (maxYear !== undefined && (movie.publishedYear === undefined || movie.publishedYear === null || movie.publishedYear > maxYear)) return false;
-                    
-                    return true;
-                });
-                
-                const excludedCount = initialCount - filteredMovies.length;
-                if (excludedCount > 0) {
-                    logger.info(`Filtered ${excludedCount} items from list ${list.url} based on configuration.`);
-                }
-            }
-
-            if (listHasErrors) {
-                logger.warn(`List ${list.url} reported partial errors. Marking associated tags as UNSAFE.`);
-                if (list.tags && list.tags.length > 0) {
-                    list.tags.forEach(t => unsafeTags.add(t));
-                } else {
-                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK.`);
-                    abortCleanup = true;
-                }
-                hasError = true;
-            }
-
-            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
-
-            for (const movie of filteredMovies) {
-                if (!movie.tmdbId) {
-                    logger.warn(`Movie '${movie.name}' missing TMDB ID. Marking tags unsafe.`);
-                    if (list.tags && list.tags.length > 0) {
-                        list.tags.forEach(t => unsafeTags.add(t));
-                    } else {
-                         logger.error(`List ${list.url} has items without IDs and NO tags. Activating SAFETY LOCK.`);
-                         abortCleanup = true;
-                    }
-                    continue;
-                }
-
-                if (allItems.has(movie.tmdbId)) {
-                    const existing = allItems.get(movie.tmdbId)!;
-                    const existingTags = existing.tags || [];
-                    const newTags = list.tags || [];
-                    existing.tags = [...new Set([...existingTags, ...newTags])];
-                    
-                    if (list.qualityProfile) {
-                        existing.qualityProfile = list.qualityProfile;
-                    }
-                } else {
-                    movie.tags = [...(list.tags || [])];
-                    if (list.qualityProfile) {
-                        movie.qualityProfile = list.qualityProfile;
-                    }
-                    allItems.set(movie.tmdbId, movie);
-                }
-            }
-            logger.info(`Fetched ${filteredMovies.length} movies from list (${list.url}).`);
-
-        } catch (e: any) {
-            logger.error(`Error fetching list ${list.url}:`, e);
-            hasError = true;
-            if (list.tags && list.tags.length > 0) {
-                list.tags.forEach(t => unsafeTags.add(t));
-            } else {
-                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
-                abortCleanup = true;
-            }
-        }
-    })));
-
-    // Calculate Managed Tags
-    const managedTags = new Set<string>();
-    potentialManagedTags.forEach(t => {
-        if (!unsafeTags.has(t)) {
-            managedTags.add(t);
-        } else {
-            logger.warn(`Tag '${t}' is present in a failed list. It will be protected from cleanup.`);
-        }
-    });
-
-    const uniqueMovies = Array.from(allItems.values());
-
-    if (uniqueMovies.length > 0) {
-        // If we found movies, we are "working", even if some lists failed. 
-        // Report OK but include error note in message.
-        const statusMsg = hasError 
-            ? `Found ${uniqueMovies.length} unique movies (some list errors)` 
-            : `Found ${uniqueMovies.length} unique movies`;
-            
-        updateComponentStatus('letterboxd', 'ok', statusMsg);
-        logger.info(`Total unique movies found: ${uniqueMovies.length}`);
-        
-        try {
-            await syncMovies(uniqueMovies, managedTags, unsafeTags, abortCleanup);
-            updateComponentStatus('radarr', 'ok');
-            
-            const allPlexTags = [...plexGlobalTags, TAG_LETTERBOXD];
-            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
-            
-            await plex.syncPlexTags(uniqueMovies, allPlexTags, plexManagedTags, 'movie');
-        } catch (e: any) {
-            updateComponentStatus('radarr', 'error', e.message);
-            throw e; 
-        }
-    } else {
-        if (hasError) {
-             updateComponentStatus('letterboxd', 'error', 'Failed to fetch any movies');
-        } else {
-             updateComponentStatus('letterboxd', 'ok', 'No movies found in lists');
-        }
-    }
-}
-
-/**
- * Process TV Show Lists (Serializd -> Sonarr)
- */
-export async function syncShowsFromLists(
-    lists: BaseListConfig[],
-    plexGlobalTags: string[]
-) {
-    if (lists.length === 0) {
-        updateComponentStatus('serializd', 'disabled');
-        return;
-    }
-
-    const potentialManagedTags = new Set<string>();
-    const unsafeTags = new Set<string>();
-    let hasError = false;
-    let abortCleanup = false;
-
-    const allItems = new Map<string, ScrapedSeries>(); // ShowID -> Series
-
-    logger.info(`Processing ${lists.length} Serializd lists...`);
-
-    await Promise.all(lists.map(list => listQueue.add(async () => {
-        if (!isListActive(list)) {
-
-            logger.info(`Skipping inactive list: ${list.id || list.url}`);
-            return; // Return early for inactive lists
-        }
-
-        try {
-            logger.info(`Fetching list: ${list.url} (Tags: ${list.tags.join(', ')})`);
-            logger.debug(`Fetching list: ${list.url}`);
-            
-            // Serializd Fetcher
-            const scraper = new SerializdScraper(list.url);
-            const { items: shows, hasErrors: listHasErrors } = await scraper.getSeries();
-
-            if (listHasErrors) {
-                logger.warn(`List ${list.url} reported partial errors. Marking tags UNSAFE.`);
-                if (list.tags && list.tags.length > 0) {
-                    list.tags.forEach(t => unsafeTags.add(t));
-                } else {
-                    logger.error(`List ${list.url} failed and has NO tags. Activating SAFETY LOCK.`);
-                    abortCleanup = true;
-                }
-                hasError = true;
-            }
-
-            if (list.tags) list.tags.forEach(t => potentialManagedTags.add(t));
-
-            for (const show of shows) {
-                 // Serializd doesn't always have TMDB IDs in the same way, but we use showId
-                 const key = show.tmdbId || show.id.toString();
-
-                 if (allItems.has(key)) {
-                    const existing = allItems.get(key)!;
-                    const existingTags = existing.tags || [];
-                    const newTags = list.tags || [];
-                    existing.tags = [...new Set([...existingTags, ...newTags])];
-                    
-                    if (list.qualityProfile) {
-                        existing.qualityProfile = list.qualityProfile;
-                    }
-                    
-                    // Merge seasons Logic could go here if needed
-                } else {
-                    show.tags = [...(list.tags || [])];
-                    if (list.qualityProfile) {
-                        show.qualityProfile = list.qualityProfile;
-                    }
-                    allItems.set(key, show);
-                }
-            }
-             logger.info(`Fetched ${shows.length} shows from list (${list.url}).`);
-
-        } catch (e: any) {
-            logger.error(`Error fetching list ${list.url}:`, e);
-            hasError = true;
-            if (list.tags && list.tags.length > 0) {
-                list.tags.forEach(t => unsafeTags.add(t));
-            } else {
-                logger.error(`List ${list.url} failed entirely and has NO tags. Activating SAFETY LOCK.`);
-                abortCleanup = true;
-            }
-        }
-    })));
-
-    const managedTags = new Set<string>();
-    potentialManagedTags.forEach(t => {
-        if (!unsafeTags.has(t)) {
-            managedTags.add(t);
-        } else {
-             logger.warn(`Tag '${t}' is present in a failed list. Protected.`);
-        }
-    });
-
-    const uniqueShows = Array.from(allItems.values());
-
-    if (uniqueShows.length > 0) {
-        const statusMsg = hasError
-            ? `Found ${uniqueShows.length} unique shows (some list errors)`
-            : `Found ${uniqueShows.length} unique shows`;
-
-        updateComponentStatus('serializd', 'ok', statusMsg);
-        logger.info(`Total unique shows found: ${uniqueShows.length}`);
-        
-        try {
-            await syncSeries(uniqueShows, managedTags, unsafeTags, abortCleanup);
-            updateComponentStatus('sonarr', 'ok');
-            
-            const allPlexTags = [...plexGlobalTags, TAG_SERIALIZD];
-            const plexManagedTags = new Set([...managedTags, ...allPlexTags]);
-            
-            await plex.syncPlexTags(uniqueShows, allPlexTags, plexManagedTags, 'show');
-        } catch (e: any) {
-            updateComponentStatus('sonarr', 'error', e.message);
-            throw e; 
-        }
-    } else {
-        if (hasError) {
-             updateComponentStatus('serializd', 'error', 'Failed to fetch any shows');
-        } else {
-             updateComponentStatus('serializd', 'ok', 'No shows found in lists');
-        }
-    }
-}
-
-export async function run() {
-    // Reload config on every run
-    const currentConfig = loadConfig();
-
-    // 1. Process Movies
-    await syncMoviesFromLists(
-        currentConfig.letterboxd,
-        currentConfig.radarr?.tags || []
-    );
-
-    // 2. Process Shows
-    await syncShowsFromLists(
-        currentConfig.serializd,
-        currentConfig.sonarr?.tags || []
-    );
-  
-  logger.info('Sync complete.');
-}
-
-export async function main() {
-  // Start health check server
-  startHealthServer(3000);
-
-  startScheduledMonitoring();
-  
-  // Keep the process alive
-  logger.info('Application started successfully. Monitoring for changes...');
-}
-
-export { startScheduledMonitoring };
 
 if (require.main === module) {
-  main().catch((e) => logger.error(e));
+    main().catch(e => logger.error(e));
 }

@@ -1,190 +1,246 @@
-import axios from 'axios';
-import fs from 'fs';
-import path from 'path';
-import { scraperLimiter, itemQueue } from '../util/queues';
-import logger from '../util/logger';
-import env from '../util/env';
-import { scrapeCache } from '../util/cache';
-import { LetterboxdMovie, ScrapedSeries } from './index';
+/**
+ * Serializd scraper.
+ * Fetches one or more lists from the Serializd API, resolves season IDs
+ * to season numbers, deduplicates across lists, and returns a ScrapeResult.
+ *
+ * Supported URL formats:
+ *   /user/{username}/watchlist          → personal watchlist (paginated)
+ *   /user/{username}/lists/{slug}       → user's named list
+ *   /list/{slug-with-numeric-id}        → public list (ID extracted from slug tail)
+ *
+ * Note: Serializd's `showId` is assumed to equal the TMDB series id — this
+ * has held true historically and is how downstream Sonarr/Plex lookups work.
+ */
+import Axios from 'axios';
+import { serializdLimiter, createRateLimitedAxios } from '../util/limiters';
 import { retryOperation } from '../util/retry';
+import { scrapeCache } from '../util/cache';
+import { isListActive } from '../util/schedule';
+import logger from '../util/logger';
+import type { SerializdList } from '../util/config';
+import type { MediaItem, ScrapeResult } from '../types';
+
+const SERIALIZD_API = 'https://serializd.onrender.com';
+
+const http = createRateLimitedAxios(
+    Axios.create({
+        headers: {
+            'X-Requested-With': 'serializd_vercel',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        timeout: 30_000,
+    }),
+    serializdLimiter,
+    'Serializd'
+);
+
+// ── Season resolution ─────────────────────────────────────────────────────────
+
+async function resolveSeasons(showId: number, seasonIds: number[]): Promise<number[]> {
+    if (!seasonIds.length) return [];
+
+    const resolved: number[] = [];
+
+    for (const sid of seasonIds) {
+        const cached = scrapeCache.getSeason(sid);
+        if (cached !== undefined) { resolved.push(cached); continue; }
+
+        const cacheKey = `serializd_show_${showId}`;
+        let details = scrapeCache.get<{ seasons: { id: number; seasonNumber: number }[] }>(cacheKey);
+
+        if (!details) {
+            try {
+                const res = await http.get(`${SERIALIZD_API}/api/show/${showId}`);
+                details = res.data;
+                if (details) scrapeCache.set(cacheKey, details);
+            } catch (e: any) {
+                logger.error(`Failed to fetch show details for ${showId}: ${e.message}`);
+                continue;
+            }
+        }
+
+        const season = details?.seasons?.find(s => s.id === sid);
+        if (season) {
+            scrapeCache.setSeason(sid, season.seasonNumber);
+            resolved.push(season.seasonNumber);
+        }
+    }
+
+    return resolved;
+}
+
+// ── List fetching ─────────────────────────────────────────────────────────────
 
 interface SerializdItem {
     showId: number;
     showName: string;
-    bannerImage: string;
-    dateAdded: string;
     seasonIds: number[];
 }
 
-interface SerializdResponse {
-    items: SerializdItem[];
-    totalPages: number;
-    numberOfShows: number;
+/** Map a raw API show object (any response shape) to SerializdItem. */
+function mapShow(s: any): SerializdItem | null {
+    const showId = s.showId ?? s.show_id;
+    if (!showId) return null;
+    // seasonIds (array) for watchlists, seasonId (singular) for public list items
+    const seasonIds = s.seasonIds ?? s.season_ids
+        ?? (s.seasonId != null ? [s.seasonId] : []);
+    return {
+        showId,
+        showName: s.showName ?? s.show_name ?? s.name ?? s.title ?? 'Unknown',
+        seasonIds,
+    };
 }
 
-interface SerializdShowDetails {
-    seasons: Array<{
-        id: number;
-        seasonNumber: number;
-    }>;
+/** Personal watchlist — paginated. */
+async function fetchWatchlist(username: string): Promise<SerializdItem[]> {
+    const base = `${SERIALIZD_API}/api/user/${username}/watchlistpage_v2`;
+    const all: SerializdItem[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+        const res = await retryOperation(
+            () => http.get<{ items: SerializdItem[]; totalPages: number }>(`${base}/${page}?sort_by=date_added_desc`),
+            `fetch serializd watchlist page ${page}`
+        );
+        totalPages = res.data.totalPages;
+        if (res.data.items) all.push(...res.data.items);
+        page++;
+        if (page <= totalPages) await new Promise(r => setTimeout(r, 500));
+    } while (page <= totalPages);
+
+    return all;
 }
 
-interface SeasonCache {
-    [key: string]: number;
+/** Public list URL: /list/{Name-With-NumericId}
+ *  Extracts the numeric id from the slug tail and calls /api/list/{id}. */
+async function fetchPublicList(slug: string): Promise<SerializdItem[]> {
+    const idMatch = slug.match(/(\d+)$/);
+    const listId = idMatch ? idMatch[1] : slug;
+
+    const res = await retryOperation(
+        () => http.get(`${SERIALIZD_API}/api/list/${listId}`),
+        `fetch serializd public list ${listId}`
+    );
+
+    const data = res.data;
+    const raw: any[] = Array.isArray(data)
+        ? data
+        : (data.listItems ?? data.shows ?? data.items ?? data.entries ?? []);
+
+    return raw.map(mapShow).filter((s): s is SerializdItem => s !== null);
 }
 
+/** User's named list URL: /user/{username}/lists/{slug}
+ *  Calls /api/user/{username}/list/{slug}. */
+async function fetchUserList(username: string, slug: string): Promise<SerializdItem[]> {
+    const res = await retryOperation(
+        () => http.get(`${SERIALIZD_API}/api/user/${username}/list/${slug}`),
+        `fetch serializd user list ${username}/${slug}`
+    );
 
-export class SerializdScraper {
-    private baseUrl: string;
+    const data = res.data;
+    const raw: any[] = Array.isArray(data)
+        ? data
+        : (data.shows ?? data.items ?? data.entries ?? []);
 
-    constructor(private url: string) {
-        this.baseUrl = url;
-    }
+    return raw.map(mapShow).filter((s): s is SerializdItem => s !== null);
+}
 
-    private async resolveSeasonNumbers(showId: number, seasonIds: number[]): Promise<number[]> {
-        const seasonNumbers: number[] = [];
-        let showDetails: SerializdShowDetails | undefined;
+// ── Public API ────────────────────────────────────────────────────────────────
 
-        for (const seasonId of seasonIds) {
-            // 1. Check permanent cache
-            const cachedSeasonNumber = scrapeCache.getSeason(seasonId);
-            if (cachedSeasonNumber !== undefined) {
-                seasonNumbers.push(cachedSeasonNumber);
-                continue;
-            }
+export async function scrape(lists: SerializdList[]): Promise<ScrapeResult> {
+    const byTmdb = new Map<string, MediaItem>();
+    const managedTags = new Set<string>();
+    const unsafeTags = new Set<string>();
+    let abortCleanup = false;
 
-            // 2. Fetch details if not in cache (and store using scrapeCache.setSeason)
-            if (!showDetails) {
-                logger.debug(`Fetching details for show ${showId} to resolve season IDs...`);
-                try {
-                    // Check Request Cache specific to Serializd API response
-                    const cacheKey = `serializd_show_details_${showId}`;
-                    showDetails = scrapeCache.get<SerializdShowDetails>(cacheKey);
-
-                    if (!showDetails) {
-                        // Fetch show details
-                        const response = await scraperLimiter.schedule(() => axios.get<SerializdShowDetails>(`https://www.serializd.com/api/show/${showId}`, {
-                            headers: {
-                                'X-Requested-With': 'serializd_vercel',
-                                'User-Agent': 'Mozilla/5.0'
-                            },
-                            timeout: 30000
-                        }));
-                        showDetails = response.data;
-                        
-                        // Cache the successful response
-                        if (showDetails) {
-                            scrapeCache.set(cacheKey, showDetails);
-                        }
-                    } else {
-                        logger.debug(`[CACHE HIT] Serializd Show: ${showId}`);
-                    }
-                } catch (e: any) {
-                    logger.error(`Failed to fetch details for show ${showId}:`, e);
-                    // Return what we can, or empty?
-                    continue; // Skip this season if details couldn't be fetched
-                }
-            }
-
-            if (showDetails && showDetails.seasons) {
-                const season = showDetails.seasons.find(s => s.id === seasonId);
-                if (season) {
-                    // Update permanent cache
-                    scrapeCache.setSeason(seasonId, season.seasonNumber);
-                    seasonNumbers.push(season.seasonNumber);
-                }
-            }
+    await Promise.allSettled(lists.map(async (list) => {
+        if (!isListActive(list)) {
+            logger.info(`Skipping inactive list: ${list.id ?? list.url}`);
+            return;
         }
 
-        return seasonNumbers;
-    }
+        logger.info(`Fetching Serializd list: ${list.id ?? list.url}`);
 
-    async getSeries(): Promise<{ items: ScrapedSeries[], hasErrors: boolean }> {
-        logger.info(`Scraping Serializd watchlist: ${this.url}`);
-        
-        // Extract username from URL
-        const match = this.url.match(/user\/([^\/]+)\/watchlist/);
-        if (!match) {
-            throw new Error(`Invalid Serializd watchlist URL: ${this.url}. Expected format: .../user/USERNAME/watchlist`);
+        const watchlistMatch = list.url.match(/\/user\/([^/]+)\/watchlist/);
+        const userListMatch  = list.url.match(/\/user\/([^/]+)\/lists\/([^/?]+)/);
+        const publicListMatch = list.url.match(/\/list\/([^/?]+)/);
+
+        if (!watchlistMatch && !userListMatch && !publicListMatch) {
+            throw new Error(`Invalid Serializd URL: ${list.url}`);
         }
-        const username = match[1];
-        const baseUrl = `https://www.serializd.com/api/user/${username}/watchlistpage_v2`;
-        
-        const allItems: SerializdItem[] = []; // Intermediate storage
-        let page = 1;
-        let totalPages = 1;
-        let hasErrors = false;
+
+        let raw: SerializdItem[] = [];
+        let listFailed = false;
 
         try {
-
-            do {
-                const apiUrl = `${baseUrl}/${page}?sort_by=date_added_desc`;
-                logger.debug(`Fetching Serializd API: ${apiUrl}`);
-
-                const response = await retryOperation(async () => {
-                    return await axios.get<SerializdResponse>(apiUrl, {
-                        headers: {
-                            'X-Requested-With': 'serializd_vercel',
-                            'Referer': this.url,
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                        },
-                        timeout: 30000
-                    });
-                }, `fetch serializd page ${page}`);
-
-                logger.debug(`Finished fetching Serializd page ${page}`);
-
-                const data = response.data;
-                totalPages = data.totalPages;
-
-                if (data.items) {
-                    allItems.push(...data.items);
-                }
-
-                page++;
-                
-                if (page <= totalPages) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-
-            } while (page <= totalPages);
-
-            logger.debug(`Found ${allItems.length} raw items in Serializd watchlist. resolving details...`);
-
-            logger.debug(`Resolving details for ${allItems.length} items`);
-
-            const seriesPromise = await itemQueue.addAll(allItems.map(item => {
-                return async () => {
-                     return scraperLimiter.schedule(async () => {
-                        try {
-                            let seasons: number[] = [];
-                            if (item.seasonIds && item.seasonIds.length > 0) {
-                                seasons = await this.resolveSeasonNumbers(item.showId, item.seasonIds);
-                            }
-
-                            return {
-                                id: item.showId,
-                                name: item.showName,
-                                showId: item.showId,
-                                tmdbId: item.showId.toString(), // Serializd IDs are often TMDB IDs or mapped? Assuming showId is usable.
-                                slug: item.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-                                seasons: seasons
-                            } as ScrapedSeries;
-                        } catch (e: any) {
-                            logger.warn(`Failed to process Serializd item ${item.showName} (ID: ${item.showId}): ${e.message}`);
-                            hasErrors = true;
-                            return null;
-                        }
-                    });
-                };
-            }));
-
-            const validSeries = seriesPromise.filter((s): s is ScrapedSeries => s !== null);
-            return { items: validSeries, hasErrors };
-
-        } catch (error) {
-            logger.error('Error scraping Serializd:', error as any);
-            throw error;
+            if (watchlistMatch) {
+                raw = await fetchWatchlist(watchlistMatch[1]);
+            } else if (userListMatch) {
+                raw = await fetchUserList(userListMatch[1], userListMatch[2]);
+            } else if (publicListMatch) {
+                raw = await fetchPublicList(publicListMatch[1]);
+            }
+            logger.info(`Found ${raw.length} items in ${list.id ?? list.url}.`);
+        } catch (e: any) {
+            logger.error(`Failed to fetch Serializd list ${list.url}: ${e.message}`);
+            listFailed = true;
         }
-    }
+
+        // Resolve seasons for each show (concurrent per item, limited by serializdLimiter)
+        const settled = await Promise.allSettled(raw.map(async (s) => {
+            const seasons = await resolveSeasons(s.showId, s.seasonIds ?? []);
+            return {
+                tmdbId: s.showId.toString(),
+                title: s.showName,
+                slug: s.showName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                seasons,
+            } satisfies MediaItem;
+        }));
+
+        const items: MediaItem[] = [];
+        for (let i = 0; i < settled.length; i++) {
+            const r = settled[i];
+            if (r.status === 'fulfilled') {
+                items.push(r.value);
+            } else {
+                logger.warn(`Failed to process ${raw[i]?.showName}: ${r.reason?.message}`);
+                listFailed = true;
+            }
+        }
+
+        if (listFailed) {
+            if (list.tags.length > 0) {
+                list.tags.forEach(t => unsafeTags.add(t));
+            } else {
+                logger.error(`List ${list.url} failed with no tags — activating safety lock.`);
+                abortCleanup = true;
+            }
+        }
+
+        list.tags.forEach(t => managedTags.add(t));
+
+        // Merge into dedup map
+        for (const item of items) {
+            const existing = byTmdb.get(item.tmdbId);
+            if (existing) {
+                existing.tags = [...new Set([...(existing.tags ?? []), ...list.tags])];
+                if (list.qualityProfile) existing.qualityProfile = list.qualityProfile;
+                if (item.seasons?.length) {
+                    existing.seasons = [...new Set([...(existing.seasons ?? []), ...item.seasons])];
+                }
+            } else {
+                byTmdb.set(item.tmdbId, {
+                    ...item,
+                    tags: [...list.tags],
+                    ...(list.qualityProfile && { qualityProfile: list.qualityProfile }),
+                });
+            }
+        }
+    }));
+
+    const items = [...byTmdb.values()];
+    logger.info(`Total unique shows: ${items.length}`);
+    return { items, managedTags, unsafeTags, abortCleanup };
 }

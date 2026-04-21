@@ -44,15 +44,21 @@ letterboxd:
 serializd:
   # Example 1: Personal Watchlist
   - url: https://www.serializd.com/user/username/watchlist
-    tags: 
+    tags:
       - tv-watchlist
-  
-  # Example 2: Specific Public List
+
+  # Example 2: Another user's named list  (/user/{username}/lists/{slug})
   - url: https://www.serializd.com/user/somecritic/lists/top-shows-2024
-    tags: 
+    tags:
       - best-of-2024
-    # Override Global Qualtiy Profile for this list
+    # Override Global Quality Profile for this list
     qualityProfile: "Ultra HD"
+
+  # Example 3: Public list  (/list/{Name-With-NumericId})
+  - id: "specials"
+    url: https://www.serializd.com/list/Top-Gear-Specials-Ranked-213363
+    tags:
+      - specials
 
 # ------------------------------------------
 # Global Overrides (Optional)
