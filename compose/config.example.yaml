@@ -1,85 +1,21 @@
-# ==========================================
-# Lettarrboxd Advanced Configuration
-# ==========================================
-# This file allows you to monitor multiple lists, apply filters, and override settings per list.
-# Mount this to /app/config.yaml in your docker container.
+# All fields under each URL are optional.
 
-# ------------------------------------------
-# Letterboxd Lists
-# ------------------------------------------
-letterboxd:
-  # Example 1: Watchlist (Default Behavior)
-  - url: https://letterboxd.com/username/watchlist/
-    tags: 
-      - watchlist
-      - personal
+https://letterboxd.com/username/watchlist/:
 
-  # Example 2: Curated List with Filters
-  - id: "horror-gems"  # Optional ID for logging
-    url: https://letterboxd.com/username/list/horror-gems/
-    tags: 
-      - horror
-      - gems
-    # Apply filters to ONLY add movies matching these criteria
-    filters:
-      minRating: 3.5 
-      minYear: 1980
-      maxYear: 2024
-    
-    # Override Global Quality Profile for this specific list
-    qualityProfile: "Remux-1080p"
+https://letterboxd.com/username/list/my-list/:
+  profile: HD-1080p
+  root_folder: /movies
+  tags: list-tag, another-tag
 
-  # Example 3: Scheduled List (e.g. Christmas Movies)
-  - id: "christmas-films"
-    url: "https://letterboxd.com/username/list/holiday-classics/"
-    tags: ["christmas"]
-    activeFrom: "12-01"  # Only starts syncing on Dec 1st
-    activeUntil: "12-26" # Stops syncing on Dec 26th
-    # If REMOVE_MISSING_ITEMS is enabled globally, items from this list 
-    # will be removed from Radarr when the date is outside this window.
+https://letterboxd.com/director/stanley-kubrick/:
+  profile: FHD-4K
 
-# ------------------------------------------
-# Serializd Lists (TV Shows)
-# ------------------------------------------
-serializd:
-  # Example 1: Personal Watchlist
-  - url: https://www.serializd.com/user/username/watchlist
-    tags:
-      - tv-watchlist
+https://serializd.com/user/username/watchlist:
 
-  # Example 2: Another user's named list  (/user/{username}/lists/{slug})
-  - url: https://www.serializd.com/user/somecritic/lists/top-shows-2024
-    tags:
-      - best-of-2024
-    # Override Global Quality Profile for this list
-    qualityProfile: "Ultra HD"
+https://serializd.com/user/username/lists/my-list-slug:
+  profile: FHD-4K
+  root_folder: /tv
+  tags: list-tag
 
-  # Example 3: Public list  (/list/{Name-With-NumericId})
-  - id: "specials"
-    url: https://www.serializd.com/list/Top-Gear-Specials-Ranked-213363
-    tags:
-      - specials
-
-# ------------------------------------------
-# Global Overrides (Optional)
-# ------------------------------------------
-# You can define these here OR in environment variables. 
-# Config file values take precedence if defined.
-
-radarr:
-  qualityProfile: "HD-1080p"
-  rootFolder: "/movies"  # Or use ID: 1
-  tags: [ "global-radarr-tag" ]
-
-sonarr:
-   qualityProfile: "HD-1080p"
-   rootFolder: "/tv"
-   tags: [ "global-sonarr-tag" ]
-   # Monitor strategy: all, first, latest, future, none
-   seasonMonitoring: "all"
-
-plex:
-  url: "https://localhost:32400"
-  token: "your-plex-token"
-  tags: ["lettarrboxd-synced"] 
-  # These labels are applied to all synced items in Plex
+https://serializd.com/list/My-Public-List-123:
+  profile: Any

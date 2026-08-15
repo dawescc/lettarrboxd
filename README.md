@@ -1,114 +1,97 @@
 # Lettarrboxd
 
-**Automated Media Sync for Radarr & Sonarr**
+**Passively sync items from Letterboxd/Serializd to Radarr/Sonarr.**
 
-![License](https://img.shields.io/github/license/dawescc/lettarrboxd)
-![Docker Image Version (latest by date)](https://img.shields.io/github/v/release/dawescc/lettarrboxd)
-
-Lettarrboxd is a high-performance sync tool built on **Bun** that automatically populates your Radarr and Sonarr instances from external lists.
-
-> **Note**: This project is a complete rewrite of the original [ryanpage/lettarrboxd](https://github.com/ryanpage/lettarrboxd), designed for advanced scheduling, multiple list support, and direct Plex integration.
-
----
-
-## Features
-
-### for Movies (Letterboxd → Radarr)
-*   **Universal Support**: Scrape **Watchlists**, **User Lists**, **Filmographies** (Actor/Director/Writer), **Collections**, and **Popular** lists.
-*   **Granular Control**: Override **Quality Profiles** and **Tags** on a per-list basis.
-*   **Smart Filtering**: Filter source lists by **Year** or **Rating** (e.g., "Only sync movies rated 7.0+ released after 1990").
-*   **Scheduling**: Activate specific lists only during certain dates (e.g., automatically sync a "Horror" list only in October).
-
-### for TV Shows (Serializd → Sonarr)
-*   **Watchlists & User Lists**: Automatic sync from [Serializd](https://www.serializd.com).
-*   **Season Awareness**: Intelligently maps seasons from Serializd to Sonarr monitoring.
-
-### Core Ecosystem
-*   **Plex Integration**: Automatically tag items in your Plex library for easy smart collections.
-*   **Library Cleanup**: Optional `REMOVE_MISSING_ITEMS` mode to keep your library in sync with your lists (deletes/unmonitors items removed from the source).
-*   **Performance**: Built on the Bun runtime for instant startup and minimal resource usage.
-*   **Health Checks**: Built-in HTTP server for Docker health probes.
+![License](https://img.shields.io/badge/license-MIT-green)
+![Docker Image Version](https://forgejo.dawes.cc/ryan/lettarrboxd/badges/release.svg)
+![Issues](https://forgejo.dawes.cc/ryan/lettarrboxd/badges/issues.svg)
 
 ---
 
 ## Quick Start
 
-### Docker Compose (Recommended)
-
-To unlock the full power of Lettarrboxd (multiple lists, filtering, overrides), use a `config.yaml` file.
-
-1.  Download [compose/config.example.yaml](compose/config.example.yaml) and save it as `config.yaml`.
-2.  Edit it with your desired lists and settings.
-3.  Deploy using the [compose/docker-compose.yml](compose/docker-compose.yml) file:
+### Docker Compose
 
 ```yaml
 services:
-  lettarrboxd:
-    image: ghcr.io/dawescc/lettarrboxd:latest
-    container_name: lettarrboxd
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./data:/app/data  # Persistent cache
-    environment:
-      - RADARR_API_KEY=your_radarr_key
-      - SONARR_API_KEY=your_sonarr_key
-      - PLEX_TOKEN=your_plex_token # Optional
-    restart: unless-stopped
+    lettarrboxd:
+        image: forgejo.dawes.cc/ryan/lettarrboxd:latest
+        container_name: lettarrboxd
+        env_file: .env
+        user: "1000:1000"
+        volumes:
+            - ./data:/data
 ```
 
-### Simple Mode (Env Vars Only)
+Place `config.yaml` and the SQLite cache in `./data/` (both paths are the default):
 
-For a single-list setup, you can skip the config file:
-
-```bash
-docker run -d \
-  --name lettarrboxd \
-  -e LETTERBOXD_URL=https://letterboxd.com/yourname/watchlist/ \
-  -e RADARR_API_URL=http://radarr:7878 \
-  -e RADARR_API_KEY=your_key \
-  -e RADARR_QUALITY_PROFILE="HD-1080p" \
-  -e SERIALIZD_URL=https://www.serializd.com/user/yourname/watchlist \
-  -e SONARR_API_URL=http://sonarr:8989 \
-  -e SONARR_API_KEY=your_key \
-  -e SONARR_QUALITY_PROFILE="HD-1080p" \
-  -e SONARR_ROOT_FOLDER_PATH="/tv" \
-  ghcr.io/dawescc/lettarrboxd:latest
+```sh
+mkdir -p data
+cp compose/.env.example .env
+cp compose/config.example.yaml data/config.yaml
+# Edit .env with your Radarr/Sonarr credentials
+docker compose up -d
 ```
+
+The SQLite cache is created automatically at `./data/lettarrboxd.db` on first run.
 
 ---
 
 ## Configuration
 
-### `config.yaml` Reference
+### config.yaml
 
-See [compose/config.example.yaml](compose/config.example.yaml) for a comprehensive, commented example of all available options, including:
-* Multiple Lists
-* Metric Filtering (Year, Rating)
-* Date-based Scheduling
-* Per-list Overrides (Quality Profile, Tags)
+Key each entry by the full source URL. Domain determines whether it's a movie (Letterboxd) or series (Serializd).
+
+```yaml
+https://letterboxd.com/username/watchlist/:
+
+https://letterboxd.com/username/list/my-list/:
+    profile: HD-1080p
+    root_folder: /movies
+    tags: list-tag, another-tag
+
+https://serializd.com/user/username/watchlist:
+
+https://serializd.com/user/username/lists/my-list-slug:
+    profile: FHD-4K
+    root_folder: /tv
+    tags: list-tag
+
+https://serializd.com/list/My-Public-List-123:
+    profile: Any
+```
+
+> **Note:** `profile`, `root_folder`, and `tags` are applied only when adding a new item to Radarr/Sonarr. Items that already exist in your library are not updated to reflect later config changes.
 
 ### Environment Variables
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `CHECK_INTERVAL_MINUTES` | `60` | Frequency of sync checks |
-| `REMOVE_MISSING_ITEMS` | `false` | **CAUTION**: If true, items removed from your source list will be deleted/unmonitored in Radarr/Sonarr |
-| `DRY_RUN` | `false` | Log planned actions without executing them |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| Variable             | Default                | Description                                                                                                                                                                                                                                           |
+| :------------------- | :--------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SYNC_INTERVAL`      | `60`                   | Sync interval in minutes                                                                                                                                                                                                                              |
+| `FETCH_TIMEOUT`      | `30`                   | Per-request timeout in seconds (minimum enforced: 5)                                                                                                                                                                                                  |
+| `DELETE_ORPHANS`     | `false`                | **CAUTION**: If true, items removed from your list will be deleted.                                                                                                                                                                                   |
+| `DRY_RUN`            | `false`                | Log planned actions without executing them                                                                                                                                                                                                            |
+| `LOG_LEVEL`          | `warn`                 | `debug`, `info`, `warn`, `error`                                                                                                                                                                                                                      |
+| `RADARR_URL`         | -                      | Radarr instance base URL                                                                                                                                                                                                                              |
+| `RADARR_TOKEN`       | -                      | Radarr API key                                                                                                                                                                                                                                        |
+| `SONARR_URL`         | -                      | Sonarr instance base URL                                                                                                                                                                                                                              |
+| `SONARR_TOKEN`       | -                      | Sonarr API key                                                                                                                                                                                                                                        |
+| `QUAL_PROF_MOVIES`   | -                      | Default quality profile for movies                                                                                                                                                                                                                    |
+| `QUAL_PROF_SERIES`   | -                      | Default quality profile for series                                                                                                                                                                                                                    |
+| `RADARR_ROOT_FOLDER` | -                      | Default root folder for movies                                                                                                                                                                                                                        |
+| `SONARR_ROOT_FOLDER` | -                      | Default root folder for series                                                                                                                                                                                                                        |
+| `MASTER_TAG`         | -                      | Tag applied to items when added. Used to identify managed items for orphan detection. Items already in your library before the tag was configured will not be tagged automatically. Orphan cleanup only applies to items that already carry this tag. |
+| `CONFIG_PATH`        | `/data/config.yaml`    | Path to config file                                                                                                                                                                                                                                   |
+| `DB_PATH`            | `/data/lettarrboxd.db` | Path to SQLite cache                                                                                                                                                                                                                                  |
 
 ---
 
 ## Release Channels
 
-We publish multi-arch images (`linux/amd64`, `linux/arm64`) to GHCR:
+I publish multi-arch images to Forgejo:
 
-*   `latest`: Stable releases from the `main` branch.
-*   `beta`: Testing candidates from the `beta` branch.
-*   `nightly`: Bleeding edge builds from the `dev` branch.
-*   `vX.Y.Z`: Specific version tags.
-
----
-
-## Contributing
-
-Contributions are welcome! Please ensure all unexpected changes are covered by tests and run `bun run typecheck` before submitting a PR.
+- `latest`: Stable releases from the `main` branch.
+- `beta`: Testing candidates from the `beta` branch.
+- `nightly`: Bleeding edge builds from the `dev` branch.
+- `vX.Y.Z`: Specific version tags.

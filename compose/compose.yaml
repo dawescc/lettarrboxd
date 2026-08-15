@@ -1,0 +1,10 @@
+services:
+    lettarrboxd:
+        image: forgejo.dawes.cc/ryan/lettarrboxd:nightly
+        container_name: lettarrboxd
+        env_file: .env
+        user: "1000:1000"
+        environment:
+            - TZ=America/New_York
+        volumes:
+            - ./data:/data
